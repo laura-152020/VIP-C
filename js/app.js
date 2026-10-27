@@ -267,11 +267,12 @@
   $("#m-agregar").addEventListener("click", () => {
     const f = faltantes(manual);
     if (f.length) { marcar(formManual, f); msgManual("Falta: " + textoFaltantes(f) + ".", true); return; }
-    items.unshift(Object.assign(manual, { estado: "listo", origen: "manual" }));
-    manual = nuevoRegistro({ fecha: hoy(), responsable: items[0].responsable });
+    const r = Object.assign(manual, { estado: "listo", origen: "manual" });
+    items.unshift(r);
+    manual = nuevoRegistro({ fecha: hoy(), responsable: r.responsable }); // el formulario queda en blanco
     pintarManual(); render();
-    msgManual("Registro agregado a la lista.");
-    $("#h-registros").scrollIntoView({ behavior: "smooth", block: "start" });
+    msgManual("Guardando…");
+    guardarLista([r]).then((x) => msgManual(x.texto, x.error));
   });
   $("#m-limpiar").addEventListener("click", () => { manual = nuevoRegistro({ fecha: hoy() }); pintarManual(); msgManual(""); });
 
@@ -438,11 +439,14 @@
   $("#p-limpiar").addEventListener("click", limpiarPdf);
 
   function pasarALista(lista) {
-    lista.forEach((r) => { r.agregado = true; items.unshift(Object.assign({}, r, { estado: "listo", mensaje: "" })); });
+    const copias = lista.map((r) => { r.agregado = true; return Object.assign({}, r, { estado: "listo", mensaje: "" }); });
+    items.unshift(...copias.slice().reverse());
     render();
     const sig = tramosPdf.findIndex((x) => !x.agregado);
-    if (sig < 0) { limpiarPdf(); msgPdf(lista.length > 1 ? `${lista.length} tramos agregados a la lista.` : "Registro agregado a la lista."); }
-    else { selPdf = sig; pintarPdf(); msgPdf(`${lista.map((x) => x.punto).join(", ")} agregado. Sigue con ${tramosPdf[sig].punto}.`); }
+    const nombres = lista.map((x) => x.punto).join(", ");
+    if (sig < 0) limpiarPdf(); else { selPdf = sig; pintarPdf(); }
+    msgPdf("Guardando " + nombres + "…");
+    guardarLista(copias).then((x) => msgPdf(x.texto + (sig >= 0 && tramosPdf[sig] ? ` Sigue con ${tramosPdf[sig].punto}.` : ""), x.error));
   }
   $("#p-agregar").addEventListener("click", () => {
     if (!pdfActual) { msgPdf("Primero elige un PDF.", true); return; }
@@ -557,7 +561,8 @@
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         <div class="actions">
-          ${esFoto && r.estado !== "guardado" && r.estado !== "leyendo" ? '<button type="button" class="btn btn--sm" data-act="releer">Volver a leer la foto</button>' : ""}
+          ${esFoto && ["listo", "revisar", "error"].includes(r.estado) ? '<button type="button" class="btn btn--sm btn--primary" data-act="agregar">Agregar a la lista</button>' : ""}
+          ${esFoto && r.estado !== "guardado" && r.estado !== "leyendo" && r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="releer">Volver a leer la foto</button>' : ""}
           ${r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="quitar">Quitar de la lista</button>' : ""}
         </div>
       </div>
@@ -566,10 +571,11 @@
 
   function render() {
     // Las fotos se muestran dentro de su sección (2); la carga manual y los PDF, en «Registros»
-    const fotos = items.filter((r) => r.origen === "foto"), otros = items.filter((r) => r.origen !== "foto");
+    const enSeccion = (r) => r.origen === "foto" && r.estado !== "guardado"; // una foto guardada pasa a «Registros»
+    const fotos = items.filter(enSeccion), otros = items.filter((r) => !enSeccion(r));
     $("#tarjetas-fotos").innerHTML = fotos.map(tarjeta).join("");
     $("#tarjetas").innerHTML = otros.length ? otros.map(tarjeta).join("")
-      : '<p class="vacio">' + (fotos.length ? "Los registros de la carga manual y de los PDF aparecen aquí. Las fotos están en la sección 2." : "Aún no hay registros. Agrega uno con la carga manual, sube fotos o un acta en PDF.") + "</p>";
+      : '<p class="vacio">' + "Aquí aparecen los registros que vas agregando desde las secciones 1, 2 y 3." + "</p>";
     contadores();
   }
   function actualizar(r) {
@@ -601,6 +607,14 @@
     const b = e.target.closest("button[data-act]"); if (!b) return;
     const r = buscar(b); if (!r) return;
     if (b.dataset.act === "quitar") { items = items.filter((x) => x !== r); render(); if (!HAY_BACKEND) { try { escribirLocal(); } catch (_) {} } }
+    if (b.dataset.act === "agregar") {
+      const f = faltantes(r), card = b.closest(".card");
+      const fm = $("#f-msg"), msgF = (t, e) => { fm.textContent = t; fm.style.color = e ? "var(--err)" : ""; };
+      if (f.length) { marcar(card, f); msgF("Falta: " + textoFaltantes(f) + ".", true); return; }
+      msgF("Guardando " + r.nombreArchivo + "…");
+      guardarLista([r]).then((x) => msgF(x.texto, x.error));
+      return;
+    }
     if (b.dataset.act === "releer") { cola.push(r); r.estado = "leyendo"; actualizar(r); procesarCola(); }
     if (b.dataset.act === "ver") abrirVisor(r.dataUrl || r.miniatura, r.nombreArchivo + (r.punto ? " · " + r.punto + (r.pagina ? " (página " + r.pagina + ")" : "") : ""));
   });
@@ -646,37 +660,60 @@
   }
 
   let guardando = false;
+  let colaGuardado = Promise.resolve(); // un guardado a la vez (IDs consecutivos y un solo PDF en Drive)
+
+  async function guardarUno(r) {
+    r.estado = "guardando"; actualizar(r);
+    const pdf = r.pdf; // los puntos de un mismo PDF comparten un solo archivo en Drive
+    const res = await Api.post("subir", {
+      base64: pdf ? (pdf.fileId ? "" : pdf.base64) : (r.base64 || ""), archivoId: pdf && pdf.fileId ? pdf.fileId : "",
+      mimeType: pdf ? "application/pdf" : "image/jpeg", nombreArchivo: r.nombreArchivo || "", origen: r.origen,
+      fecha: r.fecha, fechaTexto: r.fechaTexto, latitudDMS: r.latitudDMS, longitudDMS: r.longitudDMS,
+      latitud: r.latitud, longitud: r.longitud, codigoVia: r.codigoVia, nombreTramo: r.nombreTramo,
+      subregion: r.subregion, municipio: r.municipio, tipoAfectacion: r.tipoAfectacion, responsable: r.responsable,
+      estadoPunto: r.estadoPunto, observaciones: r.observaciones, origenUbicacion: r.origenUbicacion, selloLegible: r.selloLegible, vereda: r.vereda || ""
+    });
+    let resultado;
+    if (res.status === "success") {
+      r.estado = "guardado"; r.idRegistro = res.id;
+      if (pdf && res.fileId) pdf.fileId = res.fileId;
+      const ag = res.arcgis;
+      if (ag && ag.ok) { r.idArcgis = ag.fid; r.mensaje = ""; resultado = "arcgis"; }
+      else { r.mensaje = "Guardado en Drive y Sheets, pero no llegó a ArcGIS" + (ag && ag.message ? " (" + ag.message + ")" : "") + ". Queda pendiente para reenviarlo."; resultado = "sinArcgis"; }
+    } else { r.estado = "error"; r.mensaje = res.message || "No se pudo guardar."; resultado = "error"; }
+    actualizar(r);
+    return resultado;
+  }
+
+  // Guarda una lista de registros y devuelve el texto del resultado
+  function guardarLista(lista) {
+    const tarea = colaGuardado.then(async () => {
+      if (!lista.length) return { texto: "", error: false };
+      if (!HAY_BACKEND) { guardarEnDispositivo(lista); render(); return { texto: `${lista.length} registro(s) guardados en este dispositivo.`, error: false }; }
+      guardando = true; contadores();
+      let ok = 0, mal = 0, enArcgis = 0, sinArcgis = 0, ultimoError = "";
+      for (const r of lista) {
+        const x = await guardarUno(r);
+        if (x === "error") { mal++; ultimoError = r.mensaje; } else { ok++; if (x === "arcgis") enArcgis++; else sinArcgis++; }
+      }
+      guardando = false; render();
+      const ids = lista.filter((r) => r.idRegistro).map((r) => r.idRegistro).join(", ");
+      const textoArcgis = sinArcgis ? ` ${enArcgis} enviados a ArcGIS y ${sinArcgis} sin enviar (ver tarjetas).` : (enArcgis ? " Enviados a ArcGIS." : "");
+      const texto = mal
+        ? `${ok} guardados, ${mal} con error${mal === 1 && lista.length === 1 ? ": " + ultimoError : ""}. Quedó en «Registros»; corrígelo y toca «Guardar datos».${textoArcgis}`
+        : `${ok === 1 ? "Guardado" : ok + " guardados"} (${ids}).${textoArcgis}`;
+      return { texto, error: mal > 0 || sinArcgis > 0 };
+    });
+    colaGuardado = tarea.catch(() => {});
+    return tarea;
+  }
+
   $("#guardar").addEventListener("click", async () => {
     const lista = pendientes();
     const malos = validarTodos(lista);
     if (malos) { aviso(`${malos} registro(s) con datos obligatorios vacíos (marcados en rojo). Complétalos para guardar.`, true); return; }
-    if (!HAY_BACKEND) { guardarEnDispositivo(lista); return; }
-    guardando = true; contadores();
-    let ok = 0, mal = 0, enArcgis = 0, sinArcgis = 0;
-    for (const r of lista) {
-      r.estado = "guardando"; actualizar(r);
-      const pdf = r.pdf; // los puntos de un mismo PDF comparten un solo archivo en Drive
-      const res = await Api.post("subir", {
-        base64: pdf ? (pdf.fileId ? "" : pdf.base64) : (r.base64 || ""), archivoId: pdf && pdf.fileId ? pdf.fileId : "",
-        mimeType: pdf ? "application/pdf" : "image/jpeg", nombreArchivo: r.nombreArchivo || "", origen: r.origen,
-        fecha: r.fecha, fechaTexto: r.fechaTexto, latitudDMS: r.latitudDMS, longitudDMS: r.longitudDMS,
-        latitud: r.latitud, longitud: r.longitud, codigoVia: r.codigoVia, nombreTramo: r.nombreTramo,
-        subregion: r.subregion, municipio: r.municipio, tipoAfectacion: r.tipoAfectacion, responsable: r.responsable,
-        estadoPunto: r.estadoPunto, observaciones: r.observaciones, origenUbicacion: r.origenUbicacion, selloLegible: r.selloLegible, vereda: r.vereda || ""
-      });
-      if (res.status === "success") {
-        r.estado = "guardado"; r.idRegistro = res.id; ok++;
-        if (pdf && res.fileId) pdf.fileId = res.fileId;
-        const ag = res.arcgis;
-        if (ag && ag.ok) { r.idArcgis = ag.fid; r.mensaje = ""; enArcgis++; }
-        else { r.mensaje = "Guardado en Drive y Sheets, pero no llegó a ArcGIS" + (ag && ag.message ? " (" + ag.message + ")" : "") + ". Queda pendiente para reenviarlo."; sinArcgis++; }
-      }
-      else { r.estado = "error"; r.mensaje = res.message || "No se pudo guardar."; mal++; }
-      actualizar(r);
-    }
-    guardando = false; contadores();
-    const textoArcgis = sinArcgis ? ` ${enArcgis} enviados a ArcGIS y ${sinArcgis} sin enviar (ver tarjetas).` : (enArcgis ? " Enviados a ArcGIS." : "");
-    aviso(mal ? `${ok} guardados, ${mal} con error. Revisa los marcados y vuelve a intentar.${textoArcgis}` : `${ok} registro(s) guardados.${textoArcgis}`, mal > 0 || sinArcgis > 0);
+    const r = await guardarLista(lista);
+    aviso(r.texto, r.error);
   });
 
   /* Sin servidor: los registros se guardan en este navegador y se recuperan al volver a abrir la página */
