@@ -85,6 +85,66 @@
     const m = municipioEn(r.latitud, r.longitud);
     if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
   }
+  /* Capas de ArcGIS (red vial y división política): completan vía, municipio, subregión y vereda.
+     Solo llenan campos vacíos o que se llenaron solos; lo que la persona escribió no se toca. */
+  async function enriquecer(r, repintar) {
+    if (!tieneCoord(r) || typeof Capas === "undefined") return;
+    const lat = r.latitud, lon = r.longitud;
+    let info = null;
+    try { info = await Capas.enPunto(lat, lon); } catch (_) { return; }
+    if (!info || r.latitud !== lat || r.longitud !== lon) return; // cambiaron las coordenadas mientras tanto
+    let cambio = false;
+    const m = info.municipio && MUN_POR_NOMBRE[norm(info.municipio)];
+    if (m && (r.municipioAuto || !r.municipio)) {
+      r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; cambio = true;
+      // El municipio ya viene de la capa oficial: el aviso de límites aproximados deja de aplicar
+      if (/menciona .* y las coordenadas caen en/.test(r.mensaje || "")) r.mensaje = "";
+    }
+    const sub = info.subregion && SUBREGIONES.find((x) => norm(x) === norm(info.subregion));
+    if (sub && r.municipioAuto && r.subregion !== sub) { r.subregion = sub; cambio = true; }
+    if (info.vereda && r.vereda !== info.vereda) { r.vereda = info.vereda; cambio = true; }
+    const v = info.via;
+    if (v) {
+      const libre = r.viaAuto || (!String(r.codigoVia).trim() && !String(r.nombreTramo).trim());
+      if (libre) { r.codigoVia = v.codigo; r.nombreTramo = v.nombre; r.viaAuto = true; cambio = true; }
+      else if (!String(r.codigoVia).trim() && v.codigo) { r.codigoVia = v.codigo; cambio = true; } // ej. el sello trae el tramo pero no el código
+      r.viaInfo = `vía ${v.orden.toLowerCase()} a ${Math.round(v.distancia)} m`;
+    }
+    if (cambio || v) repintarSinPerderFoco(r, repintar);
+  }
+  // Relación código ↔ nombre de la red vial: al escribir uno, se completa el otro
+  async function relacionarVia(r, k, repintar) {
+    if (typeof Capas === "undefined") return;
+    try {
+      const v = k === "codigoVia" ? await Capas.porCodigo(r.codigoVia) : await Capas.porNombre(r.nombreTramo);
+      if (!v) return;
+      const otro = k === "codigoVia" ? "nombreTramo" : "codigoVia";
+      if (String(r[otro]).trim() && !(r.relAuto && r.relCampo === otro)) return;
+      r[otro] = k === "codigoVia" ? v.nombre : v.codigo; r.relAuto = true; r.relCampo = otro;
+      r[k] = k === "codigoVia" ? v.codigo : v.nombre; // escrito como en la red vial
+      repintarSinPerderFoco(r, repintar);
+    } catch (_) {}
+  }
+  function repintarSinPerderFoco(r, repintar) {
+    const caja = r === manual ? $("#form-manual") : regPdf() === r ? $("#form-pdf") : document.querySelector(`.card[data-id="${r.id}"]`);
+    const a = document.activeElement;
+    if (caja && a && caja.contains(a) && a.matches("input,textarea") && a.value !== "") {
+      // La persona está escribiendo en ese mismo formulario: solo se actualizan los otros campos
+      ["codigoVia", "nombreTramo", "municipio", "subregion"].forEach((k) => { const el = $(`[data-k="${k}"]`, caja); if (el && el !== a) el.value = r[k] || ""; });
+      const c = $("[data-coord]", caja); if (c) c.innerHTML = lineaCoord(r);
+      return;
+    }
+    repintar();
+  }
+  // Listas desplegables de códigos y nombres de la red vial
+  function cargarListasVias() {
+    if (typeof Capas === "undefined") return;
+    Capas.listas().then((l) => {
+      $("#lista-vias-cod").innerHTML = l.codigos.map((v) => `<option value="${esc(v.codigo)}">${esc(v.nombre)}</option>`).join("");
+      $("#lista-vias-nom").innerHTML = l.nombres.map((v) => `<option value="${esc(v.nombre)}">${esc(v.codigo)}</option>`).join("");
+    }).catch(() => {});
+  }
+
   function completarSubregion(r) {
     const m = MUN_POR_NOMBRE[norm(r.municipio)];
     if (m) { r.municipio = m.n; r.subregion = m.s; }
@@ -97,7 +157,8 @@
   function lineaCoord(r) {
     if (!tieneCoord(r)) return "Sin coordenadas";
     const origen = { pdf: "leídas del PDF", sello: "leídas del sello", gps: "GPS de la foto", dispositivo: "ubicación del dispositivo", manual: "escritas a mano", servidor: "leídas del sello" }[r.origenUbicacion] || "";
-    return `${r.latitud.toFixed(6)}, ${r.longitud.toFixed(6)}${origen ? " · " + origen : ""} <a href="https://www.google.com/maps?q=${r.latitud},${r.longitud}" target="_blank" rel="noopener">Ver ubicación</a>`;
+    const extra = [r.vereda && "Vereda " + esc(r.vereda), r.viaInfo && esc(r.viaInfo)].filter(Boolean).join(" · ");
+    return `${r.latitud.toFixed(6)}, ${r.longitud.toFixed(6)}${origen ? " · " + origen : ""}${extra ? " · " + extra : ""} <a href="https://www.google.com/maps?q=${r.latitud},${r.longitud}" target="_blank" rel="noopener">Ver ubicación</a>`;
   }
   function campos(r, p) {
     const alerta = fuera(r) ? '<div class="alerta">La ubicación cae fuera de Antioquia. Verifica las coordenadas.</div>' : "";
@@ -109,8 +170,8 @@
       </div>
       <div class="coord" data-coord>${lineaCoord(r)}</div>${alerta}
       <div class="grid grid--2">
-        <label for="${p}cv"><span>Código oficial de la vía</span><input id="${p}cv" class="mono" data-k="codigoVia" value="${esc(r.codigoVia)}" placeholder="Ej. 60AN17" autocomplete="off"></label>
-        <label for="${p}nt"><span>Nombre del tramo</span><input id="${p}nt" data-k="nombreTramo" value="${esc(r.nombreTramo)}" placeholder="Ej. Medellín - Turbo" autocomplete="off"></label>
+        <label for="${p}cv"><span>Código oficial de la vía ${r.viaAuto ? '<span class="auto">· red vial</span>' : ""}</span><input id="${p}cv" class="mono" data-k="codigoVia" value="${esc(r.codigoVia)}" placeholder="Ej. 60AN17" autocomplete="off" list="lista-vias-cod"></label>
+        <label for="${p}nt"><span>Nombre del tramo ${r.viaAuto ? '<span class="auto">· red vial</span>' : ""}</span><input id="${p}nt" data-k="nombreTramo" value="${esc(r.nombreTramo)}" placeholder="Ej. Medellín - Turbo" autocomplete="off" list="lista-vias-nom"></label>
       </div>
       <div class="grid grid--2">
         <label for="${p}sr"><span>Subregión ${r.municipioAuto ? '<span class="auto">· automática</span>' : ""}</span><select id="${p}sr" data-k="subregion">${opciones(SUBREGIONES, r.subregion)}</select></label>
@@ -137,6 +198,7 @@
       r.origenUbicacion = "manual";
       const c = $("[data-coord]", contenedor); if (c) c.innerHTML = lineaCoord(r);
     }
+    if (k === "codigoVia" || k === "nombreTramo") { r.viaAuto = false; r.viaInfo = ""; if (k === r.relCampo) r.relAuto = false; }
     if (k === "municipio") { r.municipioAuto = false; const m = MUN_POR_NOMBRE[norm(r.municipio)]; if (m) { r.subregion = m.s; const s = $('[data-k="subregion"]', contenedor); if (s) s.value = m.s; } }
   }
   function alCambiar(r, el, rerender) {
@@ -146,7 +208,9 @@
       if (!r.latitudDMS.includes("°") && !/[NS]/i.test(r.latitudDMS)) r.latitudDMS = decimalADMS(r.latitud, true);
       if (!r.longitudDMS.includes("°") && !/[WOE]/i.test(r.longitudDMS)) r.longitudDMS = decimalADMS(r.longitud, false);
       completarDesdeCoordenadas(r); rerender();
+      enriquecer(r, rerender);
     }
+    if (k === "codigoVia" || k === "nombreTramo") relacionarVia(r, k, rerender);
   }
 
   /* ======================= Validación ======================= */
@@ -185,6 +249,7 @@
       manual.origenUbicacion = "dispositivo";
       completarDesdeCoordenadas(manual);
       pintarManual();
+      enriquecer(manual, pintarManual);
       msgManual(`Ubicación tomada (precisión aprox. ${Math.round(pos.coords.accuracy)} m).`);
     }, (err) => {
       msgManual(err.code === 1 ? "Permiso de ubicación denegado. Escribe las coordenadas a mano." : "No se pudo obtener la ubicación. Escribe las coordenadas a mano.", true);
@@ -272,7 +337,7 @@
       try {
         if (avisoPrimeraVez) { aviso("Preparando el lector de fotos. La primera vez tarda unos segundos."); avisoPrimeraVez = false; }
         const o = await LectorSello.leer(r.dataUrl);
-        d = d ? Object.assign({}, o, Object.fromEntries(Object.entries(d).filter(([, v]) => v !== null && v !== ""))) : o;
+        d = d ? Object.assign({}, o, Object.fromEntries(Object.entries(d).filter(([, v]) => v != null && v !== ""))) : o;
         aviso("");
       } catch (e) { error = e.message || "No se pudo leer la foto."; }
     }
@@ -311,6 +376,7 @@
         ? "La foto no trae coordenadas. El municipio se tomó del texto del sello; agrega las coordenadas si las tienes."
         : "No se leyó todo el sello. Completa " + [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas"].filter(Boolean).join(" y ") + ".");
     actualizar(r);
+    enriquecer(r, () => actualizar(r));
   }
 
   function aviso(texto, error) {
@@ -463,6 +529,7 @@
     }
     selPdf = 0;
     pintarPdf();
+    tramosPdf.forEach((r) => enriquecer(r, () => { if (regPdf() === r) pintarPdf(); }));
   }
   pintarPdf();
 
@@ -478,7 +545,7 @@
     return `<article class="${cls}" data-id="${r.id}">
       ${conImagen ? `<button type="button" class="card__foto" data-act="ver" aria-label="${esPdf ? "Ver página del PDF" : "Ver foto completa"}"><img src="${r.miniatura}" alt="${esPdf ? "Página" : "Foto"} ${esc(r.nombreArchivo)}"><span>Ampliar</span></button>` : ""}
       <div class="card__cuerpo">
-        <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}</span><span class="chip chip--${r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado}">${etiqueta}</span></div>
+        <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         <div class="actions">
@@ -572,7 +639,7 @@
     if (malos) { aviso(`${malos} registro(s) con datos obligatorios vacíos (marcados en rojo). Complétalos para guardar.`, true); return; }
     if (!HAY_BACKEND) { guardarEnDispositivo(lista); return; }
     guardando = true; contadores();
-    let ok = 0, mal = 0;
+    let ok = 0, mal = 0, enArcgis = 0, sinArcgis = 0;
     for (const r of lista) {
       r.estado = "guardando"; actualizar(r);
       const pdf = r.pdf; // los puntos de un mismo PDF comparten un solo archivo en Drive
@@ -582,21 +649,28 @@
         fecha: r.fecha, fechaTexto: r.fechaTexto, latitudDMS: r.latitudDMS, longitudDMS: r.longitudDMS,
         latitud: r.latitud, longitud: r.longitud, codigoVia: r.codigoVia, nombreTramo: r.nombreTramo,
         subregion: r.subregion, municipio: r.municipio, tipoAfectacion: r.tipoAfectacion, responsable: r.responsable,
-        estadoPunto: r.estadoPunto, observaciones: r.observaciones, origenUbicacion: r.origenUbicacion, selloLegible: r.selloLegible
+        estadoPunto: r.estadoPunto, observaciones: r.observaciones, origenUbicacion: r.origenUbicacion, selloLegible: r.selloLegible, vereda: r.vereda || ""
       });
-      if (res.status === "success") { r.estado = "guardado"; r.idRegistro = res.id; r.mensaje = ""; ok++; if (pdf && res.fileId) pdf.fileId = res.fileId; }
+      if (res.status === "success") {
+        r.estado = "guardado"; r.idRegistro = res.id; ok++;
+        if (pdf && res.fileId) pdf.fileId = res.fileId;
+        const ag = res.arcgis;
+        if (ag && ag.ok) { r.idArcgis = ag.fid; r.mensaje = ""; enArcgis++; }
+        else { r.mensaje = "Guardado en Drive y Sheets, pero no llegó a ArcGIS" + (ag && ag.message ? " (" + ag.message + ")" : "") + ". Queda pendiente para reenviarlo."; sinArcgis++; }
+      }
       else { r.estado = "error"; r.mensaje = res.message || "No se pudo guardar."; mal++; }
       actualizar(r);
     }
     guardando = false; contadores();
-    aviso(mal ? `${ok} guardados, ${mal} con error. Revisa los marcados y vuelve a intentar.` : `${ok} registro(s) guardados.`, mal > 0);
+    const textoArcgis = sinArcgis ? ` ${enArcgis} enviados a ArcGIS y ${sinArcgis} sin enviar (ver tarjetas).` : (enArcgis ? " Enviados a ArcGIS." : "");
+    aviso(mal ? `${ok} guardados, ${mal} con error. Revisa los marcados y vuelve a intentar.${textoArcgis}` : `${ok} registro(s) guardados.${textoArcgis}`, mal > 0 || sinArcgis > 0);
   });
 
   /* Sin servidor: los registros se guardan en este navegador y se recuperan al volver a abrir la página */
   const CLAVE_LOCAL = "vipc-registros-v1";
   const CAMPOS_LOCALES = ["id", "origen", "estado", "idRegistro", "nombreArchivo", "miniatura", "fecha", "fechaTexto", "latitudDMS", "longitudDMS",
     "latitud", "longitud", "origenUbicacion", "codigoVia", "nombreTramo", "subregion", "municipio", "municipioAuto",
-    "tipoAfectacion", "responsable", "estadoPunto", "observaciones", "selloLegible", "punto", "pagina"];
+    "tipoAfectacion", "responsable", "estadoPunto", "observaciones", "selloLegible", "punto", "pagina", "vereda"];
   function escribirLocal() {
     const datos = items.filter((r) => r.estado === "guardado").map((r) => Object.fromEntries(CAMPOS_LOCALES.map((k) => [k, r[k]])));
     localStorage.setItem(CLAVE_LOCAL, JSON.stringify(datos));
@@ -688,6 +762,7 @@
     if (!appIniciada) {
       appIniciada = true;
       pintarManual();
+      cargarListasVias();
       render();
       // Precarga el lector en segundo plano para que la primera foto sea más rápida
       setTimeout(() => { try { LectorSello.iniciar().catch(() => {}); } catch (_) {} }, 1500);

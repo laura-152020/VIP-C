@@ -27,6 +27,7 @@ js/config.js                     ÚNICO archivo a editar al desplegar (URL y cla
 js/app.js                        Formulario, lista de registros y guardado
 js/ocr.js                        Lectura del sello (fecha, coordenadas, tramo, código de vía)
 js/lectorpdf.js                  Lectura de actas en PDF (pdf.js)
+js/capas.js                      Consulta de la red vial y la división política (ArcGIS)
 js/municipios.js                 125 municipios con subregión y límites (DANE, MGN 2018)
 backend/Code.gs                  Apps Script (un solo archivo)
 backend/appsscript.json          Manifiesto del Apps Script
@@ -127,8 +128,45 @@ Desde ese momento la página pide usuario y contraseña. **Guardar datos** guard
 
 > ¿Ya tenías la versión anterior conectada? Esta versión escribe en una hoja nueva, `Registro_VIPC`, con las columnas nuevas. La hoja anterior queda intacta. Después de pegar el nuevo `Code.gs`, haz **Implementar → Gestionar implementaciones → Editar → Versión nueva**.
 
-## Llevar los datos a ArcGIS
-- Usa `URL_EXEC?accion=listar&formato=csv&admin=TU_ADMIN_TOKEN`, o `formato=geojson`. Comparte ese enlace solo con quien administre ArcGIS: da acceso a todos los datos.
+## Envío automático a ArcGIS
+
+Al tocar **Guardar datos**, cada registro (manual, foto o PDF) se guarda en Drive y Sheets y luego se agrega como punto a la capa de ArcGIS Online **Inventario_Avanzadas**. La foto o el PDF van como adjunto del punto.
+
+| Campo ArcGIS | Dato de VIP-C |
+|---|---|
+| ARCHIVO | Nombre de la foto o del PDF en Drive (máx. 50 caracteres, conserva la extensión) |
+| COD_VIA / NOM_VIA | Código oficial de la vía / Nombre del tramo |
+| MUNICIPIO / SUBREGION | Municipio / Subregión |
+| TIPO_AFEC | Tipo de afectación |
+| OBSERV | Observaciones o resumen del PDF (máx. 254 caracteres; el texto completo queda en Sheets) |
+| FECHA | Fecha de la visita |
+| LAT_DEC / LON_DEC + punto en el mapa | Coordenadas en grados decimales |
+| FUENTE | Forma de carga y origen de las coordenadas, ej. «Carga fotográfica (Sello foto)» |
+| Adjunto del punto | La foto o el PDF |
+
+El código lee los campos de la capa antes de enviar: si la capa cambia, solo manda los campos que existan y recorta cada texto a su largo.
+`ensayarArcgis` crea un punto de prueba en La Alpujarra con una imagen adjunta; `borrarEnsayosArcgis` lo borra.
+
+- En la hoja `Registro_VIPC`, las columnas **ArcGIS_FID** y **ArcGIS_Estado** muestran si cada registro llegó.
+- Si ArcGIS falla, el registro queda guardado en Sheets como pendiente. Ejecuta `reenviarArcgis` en el editor para reenviar todos los pendientes.
+- `probarArcgis` revisa la conexión con la capa sin crear nada.
+- Si la capa no es editable en público, agrega las propiedades `ARCGIS_USUARIO` y `ARCGIS_CLAVE` (una cuenta de ArcGIS Online con permiso de edición). `ARCGIS_URL` permite cambiar de capa.
+- Anular un registro en VIP-C no lo borra de ArcGIS.
+- Exportar todo: `URL_EXEC?accion=listar&formato=csv&admin=TU_ADMIN_TOKEN` (o `formato=geojson`).
+
+## Capas de referencia (solo lectura)
+
+La página consulta dos capas públicas de ArcGIS Online, directamente desde el navegador:
+
+| Capa | Link | Para qué |
+|---|---|---|
+| Red vial (Circular 10) | `.../rest/services/R10/FeatureServer` (1 primaria, 2 secundaria, 3 terciaria) | Con las coordenadas, busca la vía más cercana (máx. 200 m) y llena **Código oficial de la vía** y **Nombre del tramo**. Al escribir un código se llena el nombre y al revés; las dos casillas sugieren los valores de la red vial. |
+| División política de Antioquia | `.../rest/services/División_política_de_Antioquia/FeatureServer` (2 veredas, 3 municipios, 4 subregiones) | Con las coordenadas, llena **Municipio** y **Subregión** con los límites oficiales y muestra la **vereda** (se guarda en la columna Vereda del Sheet). |
+
+- Solo se llenan campos vacíos o que se llenaron solos; lo que la persona escribió no se cambia.
+- Los nombres de las columnas de cada capa se detectan solos. Para ver cuáles se detectaron: abre la consola del navegador (F12) y escribe `Capas.diagnostico()`.
+- Si las capas no responden, la página sigue funcionando con los límites del DANE que trae incluidos.
+- Los links están al inicio de `js/capas.js`.
 
 ## Notas
 - Los límites municipales vienen del Marco Geoestadístico Nacional 2018 del DANE, simplificados. Cerca de un límite el municipio sugerido puede ser el vecino; siempre se puede corregir a mano.

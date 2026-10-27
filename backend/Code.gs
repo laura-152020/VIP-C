@@ -53,7 +53,7 @@ const COLUMNAS = [
   "Latitud", "Longitud", "CodigoVia", "NombreTramo", "Subregion", "Municipio",
   "TipoAfectacion", "Responsable", "Estado", "Observaciones", "Origen",
   "Archivo", "FileId", "URL", "OrigenUbicacion", "SelloLegible", "FueraDeAntioquia",
-  "EstadoRegistro", "FechaAnulacion", "MotivoAnulacion", "RegistradoPor"
+  "EstadoRegistro", "FechaAnulacion", "MotivoAnulacion", "RegistradoPor", "ArcGIS_FID", "ArcGIS_Estado", "Vereda"
 ];
 const HOJA_USUARIOS = "Usuarios";
 const COLUMNAS_USUARIOS = ["Usuario", "Nombre", "Rol", "Activo", "ContraseñaNueva", "Hash", "Sal", "UltimoIngreso", "Correo", "Entidad", "Empresa", "Supervisor", "FechaSolicitud", "Vence"];
@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "5.2.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "5.5.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -951,6 +951,7 @@ function subirFoto_(p) {
   }
 
   // Sheets con bloqueo para que el ID consecutivo no se repita
+  let fila = 0, idGuardado = "";
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -966,14 +967,220 @@ function subirFoto_(p) {
       archivo ? archivo.getName() : "", archivo ? archivo.getId() : "", archivo ? archivo.getUrl() : "",
       texto_(p.origenUbicacion) || "manual", p.selloLegible ? "SI" : "NO",
       fueraDeAntioquia_(lat, lon) ? "SI" : "NO",
-      "ACTIVO", "", "", texto_(p.registradoPor)
+      "ACTIVO", "", "", texto_(p.registradoPor), "", "PENDIENTE", texto_(p.vereda)
     ]);
-    return { status: "success", id: id, fileId: archivo ? archivo.getId() : "", url: archivo ? archivo.getUrl() : "" };
+    fila = hoja.getLastRow();
+    idGuardado = id;
   } catch (err) {
-    return { status: "partial_error", message: (archivo ? "La foto quedó en Drive pero falló" : "Falló") + " el registro en Sheets: " + err.message };
+    return { status: "partial_error", message: (archivo ? "El archivo quedó en Drive pero falló" : "Falló") + " el registro en Sheets: " + err.message };
   } finally {
     lock.releaseLock();
   }
+
+  // ArcGIS: se envía después de guardar en Sheets; si falla, el registro queda PENDIENTE para reenviarlo
+  const ag = enviarArcgis_(p, idGuardado, lat, lon, archivo);
+  marcarArcgis_(fila, idGuardado, ag);
+  return { status: "success", id: idGuardado, fileId: archivo ? archivo.getId() : "", url: archivo ? archivo.getUrl() : "", arcgis: ag };
+}
+
+/* ======================= ArcGIS Online (capa Inventario_Avanzadas) ======================= */
+// Cada registro guardado se agrega como punto a la capa y se le adjunta la foto o el PDF.
+// Propiedades opcionales: ARCGIS_URL (otra capa), ARCGIS_USUARIO y ARCGIS_CLAVE (si la capa no es editable en público).
+const ARCGIS_URL_DEFECTO = "https://services5.arcgis.com/K90UQIB09TmTjUL8/arcgis/rest/services/Inventario_Avanzadas/FeatureServer/0";
+const FUENTES_XY = { sello: "Sello foto", gps: "GPS foto", dispositivo: "GPS celular", manual: "Manual", pdf: "Acta PDF", servidor: "Sello foto" };
+const ORIGENES = { manual: "Carga manual", foto: "Carga fotográfica", pdf: "Acta PDF" };
+
+function arcgisUrl_() { return (prop_("ARCGIS_URL", true) || ARCGIS_URL_DEFECTO).replace(/\/+$/, ""); }
+function corta_(v, n) { const t = texto_(v); return t.length > n ? t.slice(0, n - 1) + "…" : t; }
+
+function tokenArcgis_() {
+  const usuario = prop_("ARCGIS_USUARIO", true), clave = prop_("ARCGIS_CLAVE", true);
+  if (!usuario || !clave) return "";
+  const cache = CacheService.getScriptCache();
+  const guardado = cache.get("arcgis_token");
+  if (guardado) return guardado;
+  const res = UrlFetchApp.fetch("https://www.arcgis.com/sharing/rest/generateToken", {
+    method: "post", muteHttpExceptions: true,
+    payload: { username: usuario, password: clave, referer: "https://www.arcgis.com", expiration: 120, f: "json" }
+  });
+  const d = JSON.parse(res.getContentText() || "{}");
+  if (!d.token) throw new Error("ArcGIS no aceptó el usuario o la clave (" + ((d.error && d.error.message) || res.getResponseCode()) + ").");
+  cache.put("arcgis_token", d.token, 100 * 60);
+  return d.token;
+}
+
+// Grados → Web Mercator (la capa está en 102100)
+function aMercator_(lat, lon) {
+  const x = lon * 20037508.34 / 180;
+  const y = Math.log(Math.tan((90 + lat) * Math.PI / 360)) / (Math.PI / 180) * 20037508.34 / 180;
+  return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, spatialReference: { wkid: 102100 } };
+}
+
+// Atributos de la capa Inventario_Avanzadas (ARCHIVO, COD_VIA, NOM_VIA, MUNICIPIO, SUBREGION, TIPO_AFEC, OBSERV, FECHA, LAT_DEC, LON_DEC, FUENTE)
+function atributosArcgis_(p, id, lat, lon, archivo) {
+  const f = texto_(p.fecha).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const origen = ORIGENES[texto_(p.origen)] || "Carga manual";
+  const fuenteXY = FUENTES_XY[texto_(p.origenUbicacion)] || "Manual";
+  return {
+    ARCHIVO: archivo ? archivo.getName() : "",
+    COD_VIA: texto_(p.codigoVia).toUpperCase(),
+    NOM_VIA: texto_(p.nombreTramo),
+    MUNICIPIO: texto_(p.municipio),
+    SUBREGION: texto_(p.subregion),
+    TIPO_AFEC: texto_(p.tipoAfectacion),
+    OBSERV: texto_(p.observaciones),
+    FECHA: f ? Date.UTC(Number(f[1]), Number(f[2]) - 1, Number(f[3]), 17, 0, 0) : null, // 12:00 m. en Colombia
+    LAT_DEC: lat, LON_DEC: lon,
+    FUENTE: origen + (lat !== null && fuenteXY !== origen ? " (" + fuenteXY + ")" : "")
+  };
+}
+
+// Campos que tiene hoy la capa (nombre → largo máximo). Se consulta a ArcGIS y se guarda 6 horas.
+// Así, si la capa cambia, solo se envían los campos que existen y cada texto se recorta a su largo.
+function camposArcgis_(token) {
+  const cache = CacheService.getScriptCache();
+  const g = cache.get("arcgis_campos");
+  if (g) return JSON.parse(g);
+  const res = UrlFetchApp.fetch(arcgisUrl_() + "?f=json" + (token ? "&token=" + encodeURIComponent(token) : ""), { muteHttpExceptions: true });
+  const d = JSON.parse(res.getContentText() || "{}");
+  if (!d.fields) return null;
+  const campos = {};
+  d.fields.forEach(function (c) { if (c.editable !== false) campos[c.name] = { t: c.type, n: c.length || 0 }; });
+  cache.put("arcgis_campos", JSON.stringify(campos), 6 * 3600);
+  return campos;
+}
+function ajustarAtributos_(attrs, campos) {
+  if (!campos) return attrs;
+  const out = {};
+  Object.keys(attrs).forEach(function (k) {
+    const c = campos[k]; if (!c) return; // la capa no tiene ese campo
+    let v = attrs[k];
+    if (c.t === "esriFieldTypeString" && v !== null && c.n) {
+      v = String(v);
+      if (v.length > c.n) {
+        const ext = (v.match(/\.[a-z0-9]{2,4}$/i) || [""])[0]; // nombres de archivo: conserva la extensión
+        v = ext && k === "ARCHIVO" ? v.slice(0, c.n - ext.length - 1) + "…" + ext : v.slice(0, c.n - 1) + "…";
+      }
+    }
+    out[k] = v;
+  });
+  return out;
+}
+
+function enviarArcgis_(p, id, lat, lon, archivo) {
+  try {
+    const url = arcgisUrl_(), token = tokenArcgis_();
+    let campos = null; try { campos = camposArcgis_(token); } catch (_) {}
+    const feature = { attributes: ajustarAtributos_(atributosArcgis_(p, id, lat, lon, archivo), campos), geometry: lat === null ? null : aMercator_(lat, lon) };
+    const pl = { features: JSON.stringify([feature]), rollbackOnFailure: "true", f: "json" };
+    if (token) pl.token = token;
+    const res = UrlFetchApp.fetch(url + "/addFeatures", { method: "post", payload: pl, muteHttpExceptions: true });
+    const d = JSON.parse(res.getContentText() || "{}");
+    const r = d.addResults && d.addResults[0];
+    if (!r || !r.success) {
+      const e = (r && r.error) || d.error || {};
+      return { ok: false, message: "ArcGIS: " + (e.message || e.description || ("respuesta " + res.getResponseCode())) + (e.code === 499 || e.code === 498 ? " (la capa pide iniciar sesión: configura ARCGIS_USUARIO y ARCGIS_CLAVE)" : "") };
+    }
+    let adjunto = "";
+    if (archivo) {
+      try {
+        const blob = archivo.getBlob();
+        if (blob.getBytes().length <= 20 * 1024 * 1024) {
+          const fa = { attachment: blob, f: "json" };
+          if (token) fa.token = token;
+          const ra = JSON.parse(UrlFetchApp.fetch(url + "/" + r.objectId + "/addAttachment", { method: "post", payload: fa, muteHttpExceptions: true }).getContentText() || "{}");
+          adjunto = ra.addAttachmentResult && ra.addAttachmentResult.success ? "con adjunto" : "sin adjunto";
+        } else adjunto = "sin adjunto (archivo de más de 20 MB)";
+      } catch (e) { adjunto = "sin adjunto (" + e.message + ")"; }
+    }
+    return { ok: true, fid: r.objectId, adjunto: adjunto };
+  } catch (err) {
+    return { ok: false, message: "ArcGIS: " + (err.message || String(err)) };
+  }
+}
+
+function marcarArcgis_(fila, id, ag) {
+  try {
+    const h = hoja_();
+    const enc = h.getRange(1, 1, 1, h.getLastColumn()).getValues()[0];
+    if (!fila || String(h.getRange(fila, 1).getValue()) !== String(id)) {
+      const ids = h.getRange(1, 1, h.getLastRow(), 1).getValues();
+      fila = 0; for (let i = ids.length - 1; i >= 1; i--) if (String(ids[i][0]) === String(id)) { fila = i + 1; break; }
+      if (!fila) return;
+    }
+    const cF = enc.indexOf("ArcGIS_FID") + 1, cE = enc.indexOf("ArcGIS_Estado") + 1;
+    if (cF) h.getRange(fila, cF).setValue(ag.ok ? ag.fid : "");
+    if (cE) h.getRange(fila, cE).setValue(ag.ok ? "ENVIADO" + (ag.adjunto ? " " + ag.adjunto : "") : "ERROR: " + String(ag.message || "").slice(0, 200));
+  } catch (_) { /* no impide la respuesta */ }
+}
+
+// Reenvía a ArcGIS los registros activos que quedaron sin enviar (ejecútala a mano desde el editor)
+function reenviarArcgis() {
+  const h = hoja_();
+  const datos = h.getDataRange().getValues();
+  const enc = datos[0], c = function (n) { return enc.indexOf(n); };
+  let ok = 0, mal = 0;
+  for (let i = 1; i < datos.length; i++) {
+    const r = datos[i];
+    if (r[c("EstadoRegistro")] === "ANULADO" || r[c("ArcGIS_FID")] !== "") continue;
+    const fecha = r[c("FechaVisita")];
+    const p = {
+      fecha: fecha instanceof Date ? Utilities.formatDate(fecha, "America/Bogota", "yyyy-MM-dd") : texto_(fecha),
+      fechaTexto: r[c("FechaSello")], codigoVia: r[c("CodigoVia")], nombreTramo: r[c("NombreTramo")],
+      subregion: r[c("Subregion")], municipio: r[c("Municipio")], tipoAfectacion: r[c("TipoAfectacion")],
+      responsable: r[c("Responsable")], observaciones: r[c("Observaciones")], origen: r[c("Origen")],
+      origenUbicacion: r[c("OrigenUbicacion")], registradoPor: r[c("RegistradoPor")]
+    };
+    let archivo = null;
+    try { if (r[c("FileId")]) archivo = DriveApp.getFileById(r[c("FileId")]); } catch (_) {}
+    const lat = numero_(r[c("Latitud")]), lon = numero_(r[c("Longitud")]);
+    const ag = enviarArcgis_(p, r[c("ID")], lat, lon, archivo);
+    marcarArcgis_(i + 1, r[c("ID")], ag);
+    if (ag.ok) ok++; else { mal++; Logger.log(r[c("ID")] + " → " + ag.message); }
+  }
+  Logger.log("Enviados a ArcGIS: " + ok + " · Con error: " + mal);
+}
+
+// ENSAYO: crea un punto de prueba en la capa (frente a la Gobernación, La Alpujarra) y le sube una imagen.
+// Ejecútala desde el editor; luego mira el punto en el mapa y bórralo con borrarEnsayosArcgis.
+function ensayarArcgis() {
+  CacheService.getScriptCache().remove("arcgis_campos");
+  const token = tokenArcgis_();
+  const campos = camposArcgis_(token);
+  Logger.log("1) Campos de la capa: " + (campos ? Object.keys(campos).join(", ") : "no se pudieron leer"));
+  const p = { fecha: Utilities.formatDate(new Date(), "America/Bogota", "yyyy-MM-dd"), codigoVia: "PRUEBA", nombreTramo: "ENSAYO VIP-C",
+    municipio: "Medellín", subregion: "Valle de Aburrá", tipoAfectacion: "Otro", observaciones: "ENSAYO VIP-C: punto de prueba, se puede borrar.",
+    origen: "manual", origenUbicacion: "manual" };
+  const lat = 6.244747, lon = -75.574828;
+  const feature = { attributes: ajustarAtributos_(atributosArcgis_(p, "ENSAYO", lat, lon, null), campos), geometry: aMercator_(lat, lon) };
+  const pl = { features: JSON.stringify([feature]), f: "json" }; if (token) pl.token = token;
+  const res = UrlFetchApp.fetch(arcgisUrl_() + "/addFeatures", { method: "post", payload: pl, muteHttpExceptions: true });
+  Logger.log("2) Crear el punto → " + res.getContentText().slice(0, 300));
+  const r = (JSON.parse(res.getContentText() || "{}").addResults || [])[0];
+  if (!r || !r.success) { Logger.log("No se creó el punto. Mándale este registro a quien te ayuda."); return; }
+  // Imagen de prueba (cuadro verde de 8x8)
+  const png = Utilities.newBlob(Utilities.base64Decode("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGPgrrLDihiGlgQAACUwwZIoS6cAAAAASUVORK5CYII="), "image/png", "ensayo_vipc.png");
+  const fa = { attachment: png, f: "json" }; if (token) fa.token = token;
+  const ra = UrlFetchApp.fetch(arcgisUrl_() + "/" + r.objectId + "/addAttachment", { method: "post", payload: fa, muteHttpExceptions: true });
+  Logger.log("3) Subir la imagen al punto " + r.objectId + " → " + ra.getContentText().slice(0, 300));
+  Logger.log("Listo: busca el punto en el mapa, en La Alpujarra (Medellín). FID = " + r.objectId);
+}
+
+// Borra de la capa los puntos creados por ensayarArcgis
+function borrarEnsayosArcgis() {
+  const token = tokenArcgis_();
+  const pl = { where: "NOM_VIA = 'ENSAYO VIP-C'", f: "json" }; if (token) pl.token = token;
+  const res = UrlFetchApp.fetch(arcgisUrl_() + "/deleteFeatures", { method: "post", payload: pl, muteHttpExceptions: true });
+  Logger.log("Borrar ensayos → " + res.getContentText().slice(0, 300));
+}
+
+// Revisa la conexión con la capa sin crear nada (ejecútala desde el editor)
+function probarArcgis() {
+  const token = tokenArcgis_();
+  const res = UrlFetchApp.fetch(arcgisUrl_() + "?f=json" + (token ? "&token=" + encodeURIComponent(token) : ""), { muteHttpExceptions: true });
+  const d = JSON.parse(res.getContentText() || "{}");
+  if (d.error) { Logger.log("Error: " + d.error.message); return; }
+  Logger.log("Capa: " + d.name + " · Permisos: " + d.capabilities + (token ? " · con usuario ArcGIS" : " · acceso público"));
 }
 
 /* ======================= Borrado seguro (anulación) ======================= */
