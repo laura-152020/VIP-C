@@ -102,7 +102,9 @@
     }
     const sub = info.subregion && SUBREGIONES.find((x) => norm(x) === norm(info.subregion));
     if (sub && r.municipioAuto && r.subregion !== sub) { r.subregion = sub; cambio = true; }
-    if (info.vereda && r.vereda !== info.vereda) { r.vereda = info.vereda; cambio = true; }
+    const bonito = (t) => (t === t.toUpperCase() ? t.toLowerCase().replace(/(^|[\s(-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\b(De|Del|La|Las|Los|El|Y)\b/g, (x) => x.toLowerCase()).replace(/^./, (c) => c.toUpperCase()) : t);
+    const vereda = info.vereda ? bonito(info.vereda) : "";
+    if (vereda && r.vereda !== vereda) { r.vereda = vereda; cambio = true; }
     const v = info.via;
     if (v) {
       const libre = r.viaAuto || (!String(r.codigoVia).trim() && !String(r.nombreTramo).trim());

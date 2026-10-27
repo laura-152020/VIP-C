@@ -149,23 +149,37 @@ const Capas = (function () {
   }
 
   /* ---------- Municipio, subregión y vereda donde cae el punto ---------- */
-  async function valorEn(capa, patrones, lat, lon) {
+  // Se piden todas las columnas del polígono donde cae el punto y se escoge el valor que corresponde,
+  // mirando el contenido (un municipio de Antioquia, una subregión) y no solo el nombre de la columna.
+  const NOMS_MUN = new Set((typeof MUNICIPIOS !== "undefined" ? MUNICIPIOS : []).map((m) => normNombre(m.n)));
+  ["santafe de antioquia", "carolina", "penol", "retiro", "san vicente", "santuario", "don matias", "entrerrios", "san pedro", "yondo"]
+    .forEach((x) => NOMS_MUN.add(x));
+  const NOMS_SUB = new Set((typeof SUBREGIONES !== "undefined" ? SUBREGIONES : []).map(normNombre));
+  const esMunicipio = (v) => { const k = normNombre(v); return NOMS_MUN.has(k) || NOMS_MUN.has(k.replace(/^(el|la|los|las) /, "")); };
+  const esSubregion = (v) => NOMS_SUB.has(normNombre(v));
+  async function atributosEn(capa, lat, lon) {
     try {
-      const f = await esquema(capa);
-      const campo = buscarCampo(f, patrones);
-      if (!campo) return "";
-      const d = await pedir(capa, "/query", Object.assign(punto(lat, lon), { outFields: campo, returnGeometry: "false" }));
+      const d = await pedir(capa, "/query", Object.assign(punto(lat, lon), { outFields: "*", returnGeometry: "false" }));
       const ft = (d.features || [])[0];
-      return ft ? String(ft.attributes[campo] ?? "").trim() : "";
-    } catch (e) { console.warn("[VIP-C capas]", capa, e.message); return ""; }
+      return ft ? ft.attributes : null;
+    } catch (e) { console.warn("[VIP-C capas]", capa, e.message); return null; }
+  }
+  const textos = (at) => Object.entries(at || {}).filter(([, v]) => typeof v === "string" && v.trim()).map(([k, v]) => [k, v.trim()]);
+  function elegir(at, patrones, valido) {
+    const t = textos(at);
+    for (const p of patrones) { const x = t.find(([k, v]) => p.test(k) && valido(v)); if (x) return x[1]; }
+    const x = t.find(([, v]) => valido(v));
+    return x ? x[1] : "";
   }
   async function division(lat, lon) {
-    const [municipio, subregion, vereda] = await Promise.all([
-      valorEn(CAPA_MUNICIPIOS, PAT_MUNICIPIO, lat, lon),
-      valorEn(CAPA_SUBREGIONES, PAT_SUBREGION, lat, lon),
-      valorEn(CAPA_VEREDAS, PAT_VEREDA, lat, lon)
-    ]);
-    return { municipio, subregion, vereda };
+    const [aMun, aSub, aVer] = await Promise.all([atributosEn(CAPA_MUNICIPIOS, lat, lon), atributosEn(CAPA_SUBREGIONES, lat, lon), atributosEn(CAPA_VEREDAS, lat, lon)]);
+    const municipio = elegir(aMun, PAT_MUNICIPIO, esMunicipio) || elegir(aVer, PAT_MUNICIPIO, esMunicipio);
+    const subregion = elegir(aSub, PAT_SUBREGION, esSubregion) || elegir(aMun, PAT_SUBREGION, esSubregion);
+    const NO_VEREDA = /mpio|municip|subreg|dpto|depto|departa|cod|^id|fecha|fuente|area|shape|globalid/i;
+    const vereda = elegir(Object.fromEntries(textos(aVer).filter(([k]) => !NO_VEREDA.test(k) || /ver/i.test(k) && !/cod|^id/i.test(k))),
+      [/^(nom_?)?vereda$/i, /^nombre_?ver/i, /ver/i, /^nombre$/i, /nom/i],
+      (v) => pareceNombre(v) && !esMunicipio(v) && !esSubregion(v) && !/^\d+$/.test(v));
+    return { municipio, subregion, vereda, columnas: { municipios: aMun ? Object.keys(aMun) : null, subregiones: aSub ? Object.keys(aSub) : null, veredas: aVer } };
   }
 
   // Todo lo que se puede saber de un punto (cada parte falla por separado sin afectar a las demás)
@@ -240,9 +254,7 @@ const Capas = (function () {
   async function diagnostico() {
     const out = {};
     for (const capa of RED_VIAL) out[capa] = await camposVia(capa).catch((e) => e.message);
-    for (const [capa, p] of [[CAPA_MUNICIPIOS, PAT_MUNICIPIO], [CAPA_SUBREGIONES, PAT_SUBREGION], [CAPA_VEREDAS, PAT_VEREDA]]) {
-      out[capa] = await esquema(capa).then((f) => buscarCampo(f, p)).catch((e) => e.message);
-    }
+    out.division = await division(6.369444, -75.707778).catch((e) => e.message);
     const cat = await cargarCatalogo().catch(() => null);
     out.catalogo = cat ? cat.porCodigo.size + " códigos de vía cargados" : "no se pudo cargar";
     out.modo = modo; out.ultimoError = ultimoError || "ninguno";
