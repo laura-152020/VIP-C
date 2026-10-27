@@ -171,3 +171,7 @@ textarea{min-height:64px;resize:vertical}
 .tramo.is-sel{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
 .tramo.is-ok{opacity:.6;cursor:default}
 #form-pdf textarea{min-height:170px}
+/* 2. Carga fotográfica: la zona de carga y sus tarjetas van dentro del mismo panel */
+.drop--en-panel{padding:20px 16px}
+.drop--en-panel strong{font-size:18px}
+#tarjetas-fotos:empty{display:none}

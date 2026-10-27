@@ -565,8 +565,11 @@
   }
 
   function render() {
-    $("#tarjetas").innerHTML = items.length ? items.map(tarjeta).join("")
-      : '<p class="vacio">Aún no hay registros. Agrega uno con la carga manual, sube fotos o un acta en PDF.</p>';
+    // Las fotos se muestran dentro de su sección (2); la carga manual y los PDF, en «Registros»
+    const fotos = items.filter((r) => r.origen === "foto"), otros = items.filter((r) => r.origen !== "foto");
+    $("#tarjetas-fotos").innerHTML = fotos.map(tarjeta).join("");
+    $("#tarjetas").innerHTML = otros.length ? otros.map(tarjeta).join("")
+      : '<p class="vacio">' + (fotos.length ? "Los registros de la carga manual y de los PDF aparecen aquí. Las fotos están en la sección 2." : "Aún no hay registros. Agrega uno con la carga manual, sube fotos o un acta en PDF.") + "</p>";
     contadores();
   }
   function actualizar(r) {
@@ -586,19 +589,21 @@
   }
 
   const buscar = (el) => items.find((x) => x.id == el.closest(".card")?.dataset.id);
-  $("#tarjetas").addEventListener("input", (e) => {
+  ["#tarjetas", "#tarjetas-fotos"].forEach((sel) => {
+  $(sel).addEventListener("input", (e) => {
     const r = buscar(e.target); if (!r) return;
     const card = e.target.closest(".card");
     alEditar(r, e.target, card, () => actualizar(r));
     if (e.target.dataset.k === "estadoPunto") card.classList.toggle("is-critico", r.estadoPunto === "Crítico");
   });
-  $("#tarjetas").addEventListener("change", (e) => { const r = buscar(e.target); if (r) alCambiar(r, e.target, () => actualizar(r)); });
-  $("#tarjetas").addEventListener("click", (e) => {
+  $(sel).addEventListener("change", (e) => { const r = buscar(e.target); if (r) alCambiar(r, e.target, () => actualizar(r)); });
+  $(sel).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act]"); if (!b) return;
     const r = buscar(b); if (!r) return;
     if (b.dataset.act === "quitar") { items = items.filter((x) => x !== r); render(); if (!HAY_BACKEND) { try { escribirLocal(); } catch (_) {} } }
     if (b.dataset.act === "releer") { cola.push(r); r.estado = "leyendo"; actualizar(r); procesarCola(); }
     if (b.dataset.act === "ver") abrirVisor(r.dataUrl || r.miniatura, r.nombreArchivo + (r.punto ? " · " + r.punto + (r.pagina ? " (página " + r.pagina + ")" : "") : ""));
+  });
   });
 
   /* ======================= Visor ======================= */

@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>VIP-C · Visor interactivo de puntos críticos</title>
   <meta name="description" content="Carga e inventario fotográfico de puntos críticos de la red vial — Gobernación de Antioquia">
-  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=5.8">
+  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=5.9">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/style.css?v=5.8">
+  <link rel="stylesheet" href="css/style.css?v=5.9">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar__in">
-      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=5.8" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
+      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=5.9" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
       <div class="marca">
         <div class="marca__sigla">VIP-C</div>
         <div class="marca__nombre">Visor interactivo de puntos críticos</div>
@@ -90,7 +90,7 @@
       <p>Sube la información de las visitas de una de estas tres formas:</p>
       <ol class="modos">
         <li><a href="#manual"><b>Carga manual de datos</b></a> <span>si no tienes evidencias fotográficas.</span></li>
-        <li><a href="#fotos"><b>Carga fotográfica</b></a> <span>sube una foto y la información se llena automáticamente.</span></li>
+        <li><a href="#seccion-fotos"><b>Carga fotográfica</b></a> <span>sube una foto y la información se llena automáticamente.</span></li>
         <li><a href="#pdfs"><b>Subir PDF</b></a> <span>sube el acta de visita técnica: se llenan los campos y un resumen de todo el documento.</span></li>
       </ol>
     </section>
@@ -111,12 +111,19 @@
     </section>
 
     <!-- 2. CARGA FOTOGRÁFICA -->
-    <label class="drop" id="fotos" for="archivos">
-      <span class="drop__icon" aria-hidden="true"></span>
-      <strong><span class="num">2</span> Carga fotográfica y relleno automático</strong>
-      <small>Toca para elegir en el celular o arrastra aquí en el computador · JPG, PNG, WEBP hasta 20 MB.<br>Se leen del sello de la foto la fecha, las coordenadas y la vía.</small>
-      <input id="archivos" type="file" accept="image/jpeg,image/png,image/webp" multiple>
-    </label>
+    <section class="panel" id="seccion-fotos" aria-labelledby="h-fotos">
+      <div class="panel__head">
+        <h2 id="h-fotos"><span class="num">2</span> Carga fotográfica y relleno automático</h2>
+        <span class="hint">Fotos con sello</span>
+      </div>
+      <label class="drop drop--en-panel" id="fotos" for="archivos">
+        <span class="drop__icon" aria-hidden="true"></span>
+        <strong>Subir fotos</strong>
+        <small>Toca para elegir en el celular o arrastra aquí en el computador · JPG, PNG, WEBP hasta 20 MB.<br>Se leen del sello de la foto la fecha, las coordenadas y la vía.</small>
+        <input id="archivos" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+      </label>
+      <div id="tarjetas-fotos" class="tarjetas"></div>
+    </section>
 
     <!-- 3. SUBIR PDF · LECTURA DE PDF -->
     <section class="panel" id="pdfs" aria-labelledby="h-pdf">
@@ -171,11 +178,11 @@
 
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js"></script>
-  <script src="js/config.js?v=5.8"></script>
-  <script src="js/municipios.js?v=5.8"></script>
-  <script src="js/ocr.js?v=5.8"></script>
-  <script src="js/lectorpdf.js?v=5.8"></script>
-  <script src="js/capas.js?v=5.8"></script>
-  <script src="js/app.js?v=5.8"></script>
+  <script src="js/config.js?v=5.9"></script>
+  <script src="js/municipios.js?v=5.9"></script>
+  <script src="js/ocr.js?v=5.9"></script>
+  <script src="js/lectorpdf.js?v=5.9"></script>
+  <script src="js/capas.js?v=5.9"></script>
+  <script src="js/app.js?v=5.9"></script>
 </body>
 </html>
