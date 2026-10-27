@@ -43,12 +43,46 @@ const Capas = (function () {
   const PAT_SUBREGION = [/^(nom_?)?subregi[oó]n$/i, /subreg/i, /^nombre$/i, /nom/i];
   const PAT_VEREDA = [/^(nom_?)?vereda$/i, /^nombre_?ver/i, /vereda/i, /^nombre$/i, /nom/i];
 
-  async function camposVia(capa) {
-    const f = await esquema(capa);
-    const codigo = buscarCampo(f, PAT_CODIGO);
-    const nombre = buscarCampo(f, PAT_NOMBRE, codigo ? new RegExp("^" + codigo + "$") : null);
-    return { codigo, nombre };
+  // Columnas de código y nombre de la vía. Primero por el nombre de la columna; después se confirma
+  // mirando los valores (un código se ve como 60AN17 o 05656VT131; un nombre es texto largo).
+  const pareceCodigo = (v) => /^[0-9]{1,5}[A-Z]{1,4}[0-9]{1,5}[A-Z0-9-]*$/.test(normCodigo(v));
+  const pareceNombre = (v) => { const t = String(v || "").trim(); return t.length >= 6 && /[a-záéíóúñ]{3}/i.test(t) && !pareceCodigo(t); };
+  const camposPorCapa = {};
+  function camposVia(capa) {
+    if (camposPorCapa[capa]) return camposPorCapa[capa];
+    camposPorCapa[capa] = (async () => {
+      const f = await esquema(capa);
+      const texto = f.filter((c) => c.type === "esriFieldTypeString");
+      let muestra = [];
+      try {
+        const d = await pedir(capa, "/query", { where: "1=1", outFields: "*", returnGeometry: "false", resultRecordCount: "60" });
+        muestra = (d.features || []).map((x) => x.attributes);
+      } catch (_) {}
+      const puntaje = (campo, prueba) => {
+        const vals = muestra.map((a) => a[campo]).filter((v) => v != null && String(v).trim() !== "");
+        return vals.length ? vals.filter(prueba).length / vals.length : 0;
+      };
+      let codigo = buscarCampo(f, PAT_CODIGO);
+      if (muestra.length && (!codigo || puntaje(codigo, pareceCodigo) < 0.5)) {
+        const mejor = texto.map((c) => [c.name, puntaje(c.name, pareceCodigo)]).sort((x, y) => y[1] - x[1])[0];
+        if (mejor && mejor[1] >= 0.5) codigo = mejor[0];
+      }
+      let nombre = buscarCampo(f, PAT_NOMBRE, codigo ? new RegExp("^" + codigo + "$") : null);
+      if (muestra.length && (!nombre || puntaje(nombre, pareceNombre) < 0.5)) {
+        const mejor = texto.filter((c) => c.name !== codigo)
+          .map((c) => [c.name, puntaje(c.name, (v) => pareceNombre(v) && / - |-|–/.test(String(v))) * 2 + puntaje(c.name, pareceNombre)])
+          .sort((x, y) => y[1] - x[1])[0];
+        if (mejor && mejor[1] >= 0.5) nombre = mejor[0];
+      }
+      const r = { codigo, nombre, ejemplo: muestra[0] ? { codigo: muestra[0][codigo], nombre: muestra[0][nombre] } : null };
+      console.info("[VIP-C capas]", capa, r);
+      return r;
+    })();
+    camposPorCapa[capa].catch(() => { delete camposPorCapa[capa]; });
+    return camposPorCapa[capa];
   }
+  const normCodigo = (v) => String(v || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const normNombre = (v) => sinTilde(v).replace(/[^a-z0-9]+/g, " ").trim();
 
   /* ---------- Distancia de un punto a una línea (metros, aproximación local) ---------- */
   function distanciaALinea(lat, lon, paths) {
@@ -140,8 +174,9 @@ const Capas = (function () {
             fs.forEach((ft) => {
               const cod = String(ft.attributes[c.codigo] ?? "").trim().toUpperCase(), nom = String(ft.attributes[c.nombre] ?? "").trim();
               if (!cod || !nom) return;
-              if (!porCodigo.has(cod)) porCodigo.set(cod, { codigo: cod, nombre: nom, orden: ORDEN[k] });
-              const kn = sinTilde(nom).replace(/\s+/g, " ");
+              const kc = normCodigo(cod);
+              if (!porCodigo.has(kc)) porCodigo.set(kc, { codigo: cod, nombre: nom, orden: ORDEN[k] });
+              const kn = normNombre(nom);
               if (!porNombre.has(kn)) porNombre.set(kn, { codigo: cod, nombre: nom, orden: ORDEN[k] });
             });
             if (!d.exceededTransferLimit || !fs.length) break;
@@ -154,13 +189,24 @@ const Capas = (function () {
     catalogo.catch(() => { catalogo = null; });
     return catalogo;
   }
+  // Búsqueda tolerante: sin espacios ni guiones, y si no está exacto, por terminación (ej. 05656VT131 ↔ VT131)
   async function porCodigo(codigo) {
     const c = await cargarCatalogo();
-    return c.porCodigo.get(String(codigo || "").trim().toUpperCase().replace(/\s+/g, "")) || null;
+    const k = normCodigo(codigo);
+    if (k.length < 3) return null;
+    if (c.porCodigo.has(k)) return c.porCodigo.get(k);
+    const cand = [...c.porCodigo.entries()].filter(([x]) => Math.min(x.length, k.length) >= 5 && (x.endsWith(k) || k.endsWith(x)));
+    cand.sort((a, b) => Math.abs(a[0].length - k.length) - Math.abs(b[0].length - k.length));
+    return cand.length ? cand[0][1] : null;
   }
   async function porNombre(nombre) {
     const c = await cargarCatalogo();
-    return c.porNombre.get(sinTilde(nombre).replace(/\s+/g, " ").trim()) || null;
+    const k = normNombre(nombre);
+    if (k.length < 4) return null;
+    if (c.porNombre.has(k)) return c.porNombre.get(k);
+    const cand = [...c.porNombre.entries()].filter(([x]) => Math.min(x.length, k.length) >= 6 && (x.includes(k) || k.includes(x)));
+    cand.sort((a, b) => Math.abs(a[0].length - k.length) - Math.abs(b[0].length - k.length));
+    return cand.length ? cand[0][1] : null;
   }
   async function listas() {
     const c = await cargarCatalogo();
@@ -174,7 +220,9 @@ const Capas = (function () {
     for (const [capa, p] of [[CAPA_MUNICIPIOS, PAT_MUNICIPIO], [CAPA_SUBREGIONES, PAT_SUBREGION], [CAPA_VEREDAS, PAT_VEREDA]]) {
       out[capa] = await esquema(capa).then((f) => buscarCampo(f, p)).catch((e) => e.message);
     }
-    console.table(out);
+    const cat = await cargarCatalogo().catch(() => null);
+    out.catalogo = cat ? cat.porCodigo.size + " códigos de vía cargados" : "no se pudo cargar";
+    console.log(JSON.stringify(out, null, 2));
     return out;
   }
 

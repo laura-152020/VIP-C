@@ -115,15 +115,20 @@
   // Relación código ↔ nombre de la red vial: al escribir uno, se completa el otro
   async function relacionarVia(r, k, repintar) {
     if (typeof Capas === "undefined") return;
+    const texto = String(r[k] || "").trim();
+    if (!texto) return;
+    const avisar = (t, error) => { if (r === manual) msgManual(t, error); else if (regPdf() === r) msgPdf(t, error); };
     try {
+      avisar("Buscando en la red vial…");
       const v = k === "codigoVia" ? await Capas.porCodigo(r.codigoVia) : await Capas.porNombre(r.nombreTramo);
-      if (!v) return;
+      if (!v) { avisar(`No se encontró «${texto}» en la red vial (Circular 10). Revisa cómo está escrito o llena el otro campo a mano.`, true); return; }
+      avisar(`Red vial: ${v.codigo} · ${v.nombre} (${v.orden.toLowerCase()}).`);
       const otro = k === "codigoVia" ? "nombreTramo" : "codigoVia";
       if (String(r[otro]).trim() && !(r.relAuto && r.relCampo === otro)) return;
       r[otro] = k === "codigoVia" ? v.nombre : v.codigo; r.relAuto = true; r.relCampo = otro;
       r[k] = k === "codigoVia" ? v.codigo : v.nombre; // escrito como en la red vial
       repintarSinPerderFoco(r, repintar);
-    } catch (_) {}
+    } catch (_) { avisar("No se pudo consultar la red vial. Revisa la conexión a internet.", true); }
   }
   function repintarSinPerderFoco(r, repintar) {
     const caja = r === manual ? $("#form-manual") : regPdf() === r ? $("#form-pdf") : document.querySelector(`.card[data-id="${r.id}"]`);
