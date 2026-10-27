@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "5.6.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "5.7.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -115,6 +115,7 @@ function doPost(e) {
     if (payload.accion === "sesion") return json_({ status: "success", usuario: usuario.usuario, nombre: usuario.nombre, rol: usuario.rol });
     if (payload.accion === "leer") return json_(leerSello_(payload));
     if (payload.accion === "leerPdf") return json_(leerPdf_(payload));
+    if (payload.accion === "arcgis") return json_(consultarCapa_(payload));
     if (payload.accion === "subir") { payload.registradoPor = usuario.usuario; return json_(subirFoto_(payload)); }
     if (payload.accion === "anular") return json_(anularRegistro_(payload));
     throw new Error("Acción no reconocida.");
@@ -855,6 +856,28 @@ function leerSello_(payload) {
     selloLegible: !!d.sello_legible && lat !== null && lon !== null,
     fueraDeAntioquia: fueraDeAntioquia_(lat, lon)
   };
+}
+
+/* ======================= Capas de referencia (red vial y división política) ======================= */
+// La página consulta estas capas directo; si el navegador no puede, las pide aquí. Solo lectura y solo estas capas.
+const CAPAS_REFERENCIA = /^(R10\/FeatureServer\/[1-3]|División_política_de_Antioquia\/FeatureServer\/[1-4])$/;
+function consultarCapa_(p) {
+  const capa = texto_(p.capa), ruta = texto_(p.ruta);
+  if (!CAPAS_REFERENCIA.test(capa) || (ruta !== "" && ruta !== "/query")) throw new Error("Capa no permitida.");
+  const params = p.params && typeof p.params === "object" ? p.params : {};
+  params.f = "json";
+  const qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + "=" + encodeURIComponent(String(params[k])); }).join("&");
+  const url = "https://services5.arcgis.com/K90UQIB09TmTjUL8/arcgis/rest/services/" + encodeURI(capa) + ruta + "?" + qs;
+  const cache = CacheService.getScriptCache();
+  const clave = "capa_" + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, url));
+  const guardado = cache.get(clave);
+  if (guardado) return { status: "success", datos: JSON.parse(guardado) };
+  const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const texto = res.getContentText();
+  let datos;
+  try { datos = JSON.parse(texto); } catch (_) { return { status: "error", message: "ArcGIS respondió " + res.getResponseCode() + "." }; }
+  if (!datos.error && texto.length < 95000) { try { cache.put(clave, texto, 6 * 3600); } catch (_) {} }
+  return { status: "success", datos: datos };
 }
 
 /* ======================= Lectura de actas en PDF (Gemini) ======================= */

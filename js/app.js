@@ -144,6 +144,7 @@
   // Listas desplegables de códigos y nombres de la red vial
   function cargarListasVias() {
     if (typeof Capas === "undefined") return;
+    if (HAY_BACKEND) Capas.usarServidor((capa, ruta, params) => Api.post("arcgis", { capa, ruta, params }));
     Capas.listas().then((l) => {
       $("#lista-vias-cod").innerHTML = l.codigos.map((v) => `<option value="${esc(v.codigo)}">${esc(v.nombre)}</option>`).join("");
       $("#lista-vias-nom").innerHTML = l.nombres.map((v) => `<option value="${esc(v.nombre)}">${esc(v.codigo)}</option>`).join("");

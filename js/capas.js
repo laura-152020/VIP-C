@@ -15,11 +15,29 @@ const Capas = (function () {
   const sinTilde = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const url = (capa) => BASE + encodeURI(capa);
 
+  // Las consultas van directo del navegador a ArcGIS. Si el navegador no puede (bloqueo de la red,
+  // de la organización o del dominio), se hacen a través del Apps Script, que no tiene esa restricción.
+  let proxy = null, modo = "directo", ultimoError = "";
+  function usarServidor(fn) { proxy = fn; }
   async function pedir(capa, ruta, params) {
-    const q = new URLSearchParams(Object.assign({ f: "json" }, params || {}));
-    const r = await fetch(url(capa) + (ruta || "") + "?" + q.toString());
-    const d = await r.json();
-    if (d.error) throw new Error(d.error.message || "Error de ArcGIS");
+    const p = Object.assign({ f: "json" }, params || {});
+    if (modo === "directo") {
+      try {
+        const r = await fetch(url(capa) + (ruta || "") + "?" + new URLSearchParams(p).toString());
+        const d = await r.json();
+        if (!d.error) return d;
+        throw new Error("ArcGIS " + (d.error.code || "") + ": " + (d.error.message || "error"));
+      } catch (e) {
+        ultimoError = "directo: " + (e.message || e);
+        if (!proxy) throw e;
+        console.warn("[VIP-C capas] consulta directa falló, uso el servidor:", ultimoError);
+      }
+    }
+    const res = await proxy(capa, ruta || "", p);
+    if (!res || res.status !== "success") { ultimoError = "servidor: " + ((res && res.message) || "sin respuesta"); throw new Error(ultimoError); }
+    const d = res.datos || {};
+    if (d.error) { ultimoError = "servidor: ArcGIS " + (d.error.code || "") + ": " + (d.error.message || ""); throw new Error(ultimoError); }
+    if (modo === "directo") { modo = "servidor"; console.info("[VIP-C capas] desde ahora consulto ArcGIS a través del servidor"); }
     return d;
   }
 
@@ -55,8 +73,10 @@ const Capas = (function () {
       const texto = f.filter((c) => c.type === "esriFieldTypeString");
       let muestra = [];
       try {
-        const d = await pedir(capa, "/query", { where: "1=1", outFields: "*", returnGeometry: "false", resultRecordCount: "60" });
-        muestra = (d.features || []).map((x) => x.attributes);
+        let d;
+        try { d = await pedir(capa, "/query", { where: "1=1", outFields: "*", returnGeometry: "false", resultRecordCount: "60" }); }
+        catch (_) { d = await pedir(capa, "/query", { where: "1=1", outFields: "*", returnGeometry: "false" }); }
+        muestra = (d.features || []).slice(0, 60).map((x) => x.attributes);
       } catch (_) {}
       const puntaje = (campo, prueba) => {
         const vals = muestra.map((a) => a[campo]).filter((v) => v != null && String(v).trim() !== "");
@@ -115,13 +135,13 @@ const Capas = (function () {
         if (!c.codigo && !c.nombre) return [];
         const d = await pedir(capa, "/query", Object.assign(punto(lat, lon), {
           distance: RADIO_VIA_M, units: "esriSRUnit_Meter", outFields: [c.codigo, c.nombre].filter(Boolean).join(","),
-          returnGeometry: "true", outSR: "4326", resultRecordCount: "50"
+          returnGeometry: "true", outSR: "4326"
         }));
         return (d.features || []).map((ft) => ({
           codigo: String(ft.attributes[c.codigo] ?? "").trim(), nombre: String(ft.attributes[c.nombre] ?? "").trim(),
           orden: ORDEN[k], distancia: distanciaALinea(lat, lon, ft.geometry && ft.geometry.paths)
         }));
-      } catch (_) { return []; }
+      } catch (e) { console.warn("[VIP-C capas] red vial", capa, e.message); return []; }
     }));
     const todas = res.flat().filter((v) => (v.codigo || v.nombre) && isFinite(v.distancia) && v.distancia <= RADIO_VIA_M);
     todas.sort((a, b) => a.distancia - b.distancia);
@@ -134,10 +154,10 @@ const Capas = (function () {
       const f = await esquema(capa);
       const campo = buscarCampo(f, patrones);
       if (!campo) return "";
-      const d = await pedir(capa, "/query", Object.assign(punto(lat, lon), { outFields: campo, returnGeometry: "false", resultRecordCount: "1" }));
+      const d = await pedir(capa, "/query", Object.assign(punto(lat, lon), { outFields: campo, returnGeometry: "false" }));
       const ft = (d.features || [])[0];
       return ft ? String(ft.attributes[campo] ?? "").trim() : "";
-    } catch (_) { return ""; }
+    } catch (e) { console.warn("[VIP-C capas]", capa, e.message); return ""; }
   }
   async function division(lat, lon) {
     const [municipio, subregion, vereda] = await Promise.all([
@@ -169,7 +189,10 @@ const Capas = (function () {
             const base = { where: "1=1", outFields: c.codigo + "," + c.nombre, returnGeometry: "false", resultOffset: String(offset), resultRecordCount: "2000" };
             let d;
             try { d = await pedir(capa, "/query", Object.assign({ returnDistinctValues: "true", orderByFields: c.codigo }, base)); }
-            catch (_) { d = await pedir(capa, "/query", base); } // capas que no permiten valores distintos con paginación
+            catch (_) {
+              try { d = await pedir(capa, "/query", base); } // sin valores distintos
+              catch (_2) { d = await pedir(capa, "/query", { where: "1=1", outFields: base.outFields, returnGeometry: "false" }); d.sinPaginar = true; } // sin paginación
+            }
             const fs = d.features || [];
             fs.forEach((ft) => {
               const cod = String(ft.attributes[c.codigo] ?? "").trim().toUpperCase(), nom = String(ft.attributes[c.nombre] ?? "").trim();
@@ -179,10 +202,10 @@ const Capas = (function () {
               const kn = normNombre(nom);
               if (!porNombre.has(kn)) porNombre.set(kn, { codigo: cod, nombre: nom, orden: ORDEN[k] });
             });
-            if (!d.exceededTransferLimit || !fs.length) break;
+            if (d.sinPaginar || !d.exceededTransferLimit || !fs.length) break;
             offset += fs.length;
           }
-        } catch (_) { /* esa capa no respondió */ }
+        } catch (e) { console.warn("[VIP-C capas] catálogo", capa, e.message); }
       }
       return { porCodigo, porNombre };
     })();
@@ -222,10 +245,12 @@ const Capas = (function () {
     }
     const cat = await cargarCatalogo().catch(() => null);
     out.catalogo = cat ? cat.porCodigo.size + " códigos de vía cargados" : "no se pudo cargar";
+    out.modo = modo; out.ultimoError = ultimoError || "ninguno";
+    out.prueba = await enPunto(6.369444, -75.707778).catch((e) => e.message);
     console.log(JSON.stringify(out, null, 2));
     return out;
   }
 
-  return { enPunto, viaCercana, division, porCodigo, porNombre, listas, cargarCatalogo, diagnostico, distanciaALinea };
+  return { usarServidor, enPunto, viaCercana, division, porCodigo, porNombre, listas, cargarCatalogo, diagnostico, distanciaALinea };
 })();
 if (typeof module !== "undefined") module.exports = Capas;
