@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "6.7.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "6.9.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -897,11 +897,14 @@ function leerPdf_(payload) {
     "codigo_via (código oficial de la vía, ej 05656VT131 o 60AN17), " +
     "via (nombre de la vía o tramo, ej \"El Puerto - La Miserenga\"), " +
     "municipio (municipio de Antioquia donde está la vía), " +
-    "puntos (lista: un elemento por cada sitio con coordenadas distintas, contando también las coordenadas escritas en los sellos " +
-    "superpuestos de las FOTOGRAFÍAS del documento (léelas con cuidado: grados, minutos y segundos; N/S y W/O), con las claves " +
-    "nombre (ej \"Tramo 1\"), latitud (tal cual, ej N 6°22'10\"), longitud (tal cual, ej W 75°42'28\"), " +
+    "responsable (quién hizo la visita, exactamente uno de: " + RESPONSABLES.join(" | ") + "; Rental = Renting de Antioquia/RENTAN y sus contratistas o interventorías; vacío si no es claro), " +
+    "puntos (lista: un elemento por cada SITIO o AFECTACIÓN distinta que describa el documento, sin importar el formato del documento: " +
+    "puede identificarse por coordenadas, por abscisa PR/K (ej PR 18+200, K25+300), por número de tramo o por el nombre del lugar; " +
+    "incluye también los sitios cuyas coordenadas solo aparecen en los sellos superpuestos de las FOTOGRAFÍAS (léelas con cuidado: grados, minutos y segundos; N/S y W/O). " +
+    "No inventes sitios ni coordenadas. Claves: nombre (ej \"Tramo 1\" o \"PR 18+200\"), latitud (tal cual o vacío), longitud (tal cual o vacío), " +
+    "pr (abscisa PR o K si aparece, ej 18+200, o vacío), fecha_iso (fecha de ese sitio si es distinta a la de la visita, o vacío), " +
     "tipo_afectacion (exactamente uno de: " + TIPOS_AFECTACION.join(" | ") + "), " +
-    "descripcion (lo encontrado y lo recomendado en ese sitio, máximo 3 frases), pagina (número de página donde se describe)), " +
+    "descripcion (lo que dice el documento sobre ese sitio: lo encontrado, medidas y lo recomendado, máximo 5 frases), pagina (página donde se describe)), " +
     "resumen (resumen de TODO el documento en 4 a 6 frases claras: motivo de la visita, qué se encontró en cada tramo con sus medidas, " +
     "el riesgo para la vía y las recomendaciones; sin repetir coordenadas ni datos del encabezado del formato).";
   const body = {
@@ -930,7 +933,8 @@ function leerPdf_(payload) {
     return {
       nombre: String(p.nombre || ""), latitud: lat, longitud: lon,
       tipoAfectacion: TIPOS_AFECTACION.indexOf(p.tipo_afectacion) >= 0 ? p.tipo_afectacion : "",
-      descripcion: String(p.descripcion || ""), pagina: Number(p.pagina) || 1
+      descripcion: String(p.descripcion || ""), pr: String(p.pr || ""), pagina: Number(p.pagina) || 1,
+      fecha: /^\d{4}-\d{2}-\d{2}$/.test(p.fecha_iso || "") ? p.fecha_iso : ""
     };
   });
   return {
@@ -940,6 +944,7 @@ function leerPdf_(payload) {
     via: String(d.via || "").replace(/^\s*v[ií]a\s*/i, ""),
     municipio: String(d.municipio || ""),
     resumen: String(d.resumen || "").trim(),
+    responsable: RESPONSABLES.indexOf(d.responsable) >= 0 ? d.responsable : "",
     puntos: puntos
   };
 }
@@ -955,7 +960,8 @@ function leerFotos_(payload) {
     "Muchas son fotos con un sello de texto superpuesto (fecha, hora, coordenadas y lugar), por ejemplo «13/05/26, 8:40 a.m. N 6° 22' 10\" W 75° 42' 28\" Palmitas»; " +
     "otras son capturas de mapa con coordenadas escritas. Lee EXACTAMENTE lo escrito, sin inventar ni deducir del paisaje. " +
     "Las fechas numéricas van en formato día/mes/año. Responde SOLO JSON: {\"fotos\":[{\"indice\":0, \"fecha_iso\":\"AAAA-MM-DD o vacío\", " +
-    "\"latitud\":\"tal cual, ej N 6°22'10\\\" o vacío\", \"longitud\":\"tal cual, ej W 75°42'28\\\" o vacío\", \"legible\":true}]} con un elemento por imagen.";
+    "\"latitud\":\"tal cual, ej N 6°22'10\\\" o vacío\", \"longitud\":\"tal cual, ej W 75°42'28\\\" o vacío\", " +
+    "\"pr\":\"abscisa PR escrita en el sello, ej 18+200, o vacío\", \"legible\":true}]} con un elemento por imagen.";
   const parts = [{ text: prompt }];
   imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
@@ -970,7 +976,7 @@ function leerFotos_(payload) {
   const fotos = (Array.isArray(d.fotos) ? d.fotos : []).map(function (f) {
     const lat = dmsADecimal_(f.latitud); let lon = dmsADecimal_(f.longitud);
     if (lon !== null && lon > 60) lon = -lon;
-    return { indice: Number(f.indice), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
+    return { indice: Number(f.indice), pr: String(f.pr || ""), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
       legible: !!f.legible && lat !== null && lon !== null && !fueraDeAntioquia_(lat, lon) };
   });
   return { status: "success", fotos: fotos };

@@ -153,7 +153,13 @@ const LectorPDF = (function () {
     return m ? m[1].toUpperCase() : "";
   }
 
-  function buscarVia(plano) {
+  function buscarVia(plano, texto) {
+    // «VÍA 60AN16-1 Granada – El Choco – San Carlos» (título de informes de interventoría)
+    const t = (texto || "").split("\n").map((l) => l.trim()).find((l) => /^v[ií]a\s+\d{2,5}[A-Z]{1,4}\d{1,4}(?:-\d+)?\s+\S/i.test(l) && l.length < 110);
+    if (t) {
+      const n = t.replace(/^v[ií]a\s+\d{2,5}[A-Z]{1,4}\d{1,4}(?:-\d+)?\s+/i, "").replace(/\s+/g, " ").trim();
+      return n === n.toUpperCase() ? n.toLowerCase().replace(/(^|[\s(–-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/ (De|Del|Y) /g, (x) => x.toLowerCase()) : n;
+    }
     const m = plano.match(/en\s+la\s+v[ií]a\s+(?!de\s|a\s|que\s)(.{4,140}?)(?=\s*,|\s*\.\s|\s+identificad|\s+en\s+atenci|\s+del\s+municipio|\s+solicitad|\s+ubicad)/i);
     if (!m) return "";
     return m[1].replace(/\s+/g, " ").replace(/^["«“]|["»”]$/g, "").trim();
@@ -175,6 +181,29 @@ const LectorPDF = (function () {
     return (p > max * 0.5 ? c.slice(0, p + 1) : c + "…").trim();
   }
 
+// Abscisas: PR 18+200 · Pr18+200 · K18+200 · Km 18+200 · abscisa 18+200
+  const RE_PR = /\b(?:pr|k|km|abs(?:cisa)?)\s*\.?\s*(\d{1,3})\s*\+\s*(\d{1,3})\b/i;
+  const prDe = (t) => { const m = String(t || "").match(RE_PR); return m ? `${Number(m[1])}+${m[2].padStart(3, "0")}` : ""; };
+  function secciones(texto, fin, paginaDe, general) {
+    const lineas = [], out = [];
+    let pos = 0;
+    texto.split("\n").forEach((l) => { lineas.push({ l: l.trim(), i: pos }); pos += l.length + 1; });
+    const esTitulo = (x) => x.l.length >= 6 && x.l.length <= 80 && RE_PR.test(x.l) && x.i < fin
+      && !/^(fotograf|foto|ilustraci|imagen|figura|tabla|durante|se\s|en\s|el\s|la\s|para\s|es\s)/i.test(x.l) && !/\$|\.\s*$/.test(x.l);
+    const titulos = lineas.filter(esTitulo).filter((x, k, arr) => arr.findIndex((y) => prDe(y.l) === prDe(x.l)) === k);
+    titulos.forEach((t, k) => {
+      const hasta = Math.min(k + 1 < titulos.length ? titulos[k + 1].i : fin, (() => {
+        const m = texto.slice(t.i).search(/\n\s*[•\-\d.]*\s*(PLAN DE INTERVENCI|ACCIONES INMEDIATAS|CONCLUSIONES)/i); return m > 0 ? t.i + m : fin; })());
+      const cuerpo = texto.slice(t.i + t.l.length, hasta).split("\n")
+        .filter((l) => !/^\s*(fotograf[ií]a|foto|ilustraci[oó]n|imagen)\s*\d/i.test(l)).join("\n");
+      const pr = prDe(t.l);
+      out.push({ lat: null, lon: null, pr, nombre: "PR " + pr, titulo: t.l.replace(/\s+/g, " "),
+        tipo: tipoDe(t.l) || tipoDe(cuerpo) || general.tipoGeneral,
+        descripcion: recortar(t.l.replace(/\s+/g, " ") + ": " + limpiar(cuerpo), 1500), pagina: paginaDe(t.i) });
+    });
+    return out;
+  }
+
   /* paginas: textos por página. Devuelve los datos generales y un punto por cada coordenada distinta. */
   function interpretar(paginas) {
     const offs = []; let texto = "";
@@ -186,7 +215,7 @@ const LectorPDF = (function () {
     const general = {
       fecha: fecha.fecha, fechaTexto: fecha.texto,
       codigoVia: buscarCodigo(plano),
-      via: buscarVia(plano),
+      via: buscarVia(plano, texto),
       esGobernacion: /secretar[ií]a de infraestructura f[ií]sica|gobernaci[oó]n de antioquia/i.test(plano),
       tipoGeneral: tipoDe(plano.slice(0, 4000))
     };
@@ -226,6 +255,9 @@ const LectorPDF = (function () {
       delete p.occ;
     });
 
+    // Informes sin coordenadas en el texto: cada sección con un PR en el título es un punto
+    // (ej. «Perdida de banca Pr18+200», «Falla en tramo de vía Pr25+300»). Las coordenadas se toman luego del sello de sus fotos.
+    if (!puntos.length) secciones(texto, fin, paginaDe, general).forEach((x) => puntos.push(x));
     const r = Object.assign(general, { puntos, texto: plano });
     r.resumen = resumir(r);
     return r;
@@ -238,9 +270,9 @@ const LectorPDF = (function () {
   const corta = (t, n) => (t.length > n ? t.slice(0, n).replace(/\s+\S*$/, "") + "…" : t);
   function resumir(d) {
     const partes = [];
-    const motivo = frases(d.texto).find((f) => /se\s+realiz[oó]\s+(?:una\s+)?visita|tuvo\s+como\s+objeto/i.test(f));
+    const motivo = frases(d.texto).find((f) => /se\s+realiz[oó]\s+(?:una\s+)?visita|tuvo\s+como\s+objeto|se\s+llev[oó]\s+a\s+cabo\s+una\s+(?:inspecci|visita)/i.test(f));
     if (motivo) {
-      let m = motivo.slice(motivo.search(/se\s+realiz[oó]|la\s+visita\s+tuvo/i));
+      let m = motivo.slice(Math.max(0, motivo.search(/se\s+realiz[oó]|la\s+visita\s+tuvo|se\s+llev[oó]\s+a\s+cabo/i)));
       const fin = m.search(/\.\s/); if (fin > 40) m = m.slice(0, fin + 1);
       partes.push(corta(m, 380));
     }
@@ -272,6 +304,7 @@ const LectorPDF = (function () {
         try {
           const img = await new Promise((ok) => { try { (id.startsWith("g_") ? pag.commonObjs : pag.objs).get(id, ok); } catch (_) { ok(null); } });
           if (!img || Math.min(img.width, img.height) < (minLado || 300)) continue;
+          if (Math.max(img.width, img.height) / Math.min(img.width, img.height) > 2.6) continue; // franjas de encabezado o pie, no fotos
           const cv = document.createElement("canvas"); cv.width = img.width; cv.height = img.height;
           const cx = cv.getContext("2d");
           if (img.bitmap) cx.drawImage(img.bitmap, 0, 0);
@@ -283,13 +316,15 @@ const LectorPDF = (function () {
             else continue; // formato de 1 bit (dibujos): no son fotos
             cx.putImageData(new ImageData(rgba, img.width, img.height), 0, 0);
           } else continue;
-          out.push({ pagina: n, ancho: img.width, alto: img.height, dataUrl: cv.toDataURL("image/jpeg", 0.9) });
+          const dataUrl = cv.toDataURL("image/jpeg", 0.9);
+          if (out.some((x) => x.dataUrl === dataUrl)) continue; // la misma imagen repetida en varias páginas
+          out.push({ pagina: n, ancho: img.width, alto: img.height, dataUrl });
         } catch (_) { /* imagen que no se pudo extraer */ }
       }
     }
     return out;
   }
 
-  return { cargarLib, abrir, dibujarPagina, imagenes, interpretar, tipoDe, resumir };
+  return { cargarLib, abrir, dibujarPagina, imagenes, interpretar, tipoDe, resumir, prDe };
 })();
 if (typeof module !== "undefined") module.exports = LectorPDF;
