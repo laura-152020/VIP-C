@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.0.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.1.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -794,6 +794,21 @@ function validarSesion_(token) {
 
 /* ======================= Lectura del sello (Gemini) ======================= */
 
+// Llamada rápida a Gemini: sin «razonamiento» extra (responde mucho más rápido para leer sellos).
+// Si el modelo no acepta esa opción, se repite la llamada sin ella.
+function geminiRapido_(key, modelo, body) {
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
+  const enviar = function (b) {
+    return UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key }, payload: JSON.stringify(b) });
+  };
+  const rapido = JSON.parse(JSON.stringify(body));
+  rapido.generationConfig = Object.assign({}, rapido.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
+  let res = enviar(rapido);
+  if (res.getResponseCode() === 400) res = enviar(body);
+  return res;
+}
+
+
 function leerSello_(payload) {
   if (!payload.base64) throw new Error("No llegó la imagen.");
   const key = prop_("GEMINI_API_KEY");
@@ -821,12 +836,7 @@ function leerSello_(payload) {
     generationConfig: { responseMimeType: "application/json", temperature: 0 }
   };
 
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
-  const res = UrlFetchApp.fetch(url, {
-    method: "post", contentType: "application/json", muteHttpExceptions: true,
-    headers: { "x-goog-api-key": key },
-    payload: JSON.stringify(body)
-  });
+  const res = geminiRapido_(key, modelo, body);
   const code = res.getResponseCode();
   if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + res.getContentText().slice(0, 200) };
@@ -964,9 +974,7 @@ function leerFotos_(payload) {
     "\"pr\":\"abscisa PR escrita en el sello, ej 18+200, o vacío\", \"legible\":true}]} con un elemento por imagen.";
   const parts = [{ text: prompt }];
   imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
-  const res = UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key },
-    payload: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } }) });
+  const res = geminiRapido_(key, modelo, { contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } });
   const code = res.getResponseCode();
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + "." };
   const r = JSON.parse(res.getContentText());

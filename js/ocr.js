@@ -308,11 +308,33 @@ const LectorSello = (function () {
     return palabras.length + (/ - /.test(t) ? 1 : 0) + (/[áéíóúñ]/i.test(t) ? 0.5 : 0);
   }
   function limpiarTramo(s) {
-    return s.replace(/[|_~«»"]/g, "")
+    const t = s.replace(/[|_~«»"]/g, "")
       .replace(/[.,;:]+\s*(?=[-–—])/g, " ")
       .replace(/\s*[-–—]+\s*/g, " - ")
       .replace(/(\s+[^\s]{1})+\s*$/, "")      // basura de 1 carácter al final (OCR)
+      .replace(/^(?:[A-Z]{1,3}\s+)+(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/, "") // basura en mayúsculas al comienzo (ej. «OST Porcesito»)
       .replace(/\s{2,}/g, " ").replace(/[\s.,;:-]+$/, "").trim();
+    return corregirSegmentos(t);
+  }
+  // Parecido entre dos textos (0 a 1), tolerante a errores de lectura: coeficiente de Dice sobre pares de letras
+  function parecido(a, b) {
+    const n = (x) => sinTildes(String(x || "")).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const pares = (x) => { const r = new Map(); for (let i = 0; i < x.length - 1; i++) { const k = x.slice(i, i + 2); r.set(k, (r.get(k) || 0) + 1); } return r; };
+    const A = pares(n(a)), B = pares(n(b));
+    let inter = 0, ta = 0, tb = 0;
+    A.forEach((v, k) => { ta += v; inter += Math.min(v, B.get(k) || 0); });
+    B.forEach((v) => { tb += v; });
+    return ta + tb ? (2 * inter) / (ta + tb) : 0;
+  }
+  // Corrige cada segmento del tramo con el nombre de municipio más parecido (ej. «Yolomboló» → «Yolombó», «Vegachi» → «Vegachí»)
+  function corregirSegmentos(t) {
+    if (typeof MUNICIPIOS === "undefined" || !/ - /.test(t)) return t;
+    return t.split(" - ").map((seg) => {
+      if (seg.length < 4) return seg;
+      let mejor = null, p = 0;
+      for (const m of MUNICIPIOS) { const x = parecido(seg, m.n); if (x > p) { p = x; mejor = m.n; } }
+      return p >= 0.72 ? mejor : seg;
+    }).join(" - ");
   }
 
   function interpretar(texto) {
@@ -364,5 +386,5 @@ const LectorSello = (function () {
     return mejor;
   }
 
-  return { leer, interpretar, iniciar, _franja: franja };
+  return { leer, interpretar, iniciar, parecido, _franja: franja };
 })();

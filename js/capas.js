@@ -245,6 +245,14 @@ const Capas = (function () {
     cand.sort((a, b) => Math.abs(a[0].length - k.length) - Math.abs(b[0].length - k.length));
     return cand.length ? cand[0][1] : null;
   }
+  // Nombre de la red vial más parecido a un texto leído con errores (ej. «Porcesito - La Evrtada - Yolombó»)
+  async function nombreParecido(texto, minimo) {
+    if (!texto || typeof LectorSello === "undefined") return null;
+    const c = await cargarCatalogo();
+    let mejor = null, p = 0;
+    c.porNombre.forEach((v) => { const x = LectorSello.parecido(texto, v.nombre); if (x > p) { p = x; mejor = v; } });
+    return p >= (minimo || 0.7) ? Object.assign({ parecido: p }, mejor) : null;
+  }
   async function listas() {
     const c = await cargarCatalogo();
     return { codigos: [...c.porCodigo.values()], nombres: [...c.porNombre.values()] };
@@ -263,6 +271,6 @@ const Capas = (function () {
     return out;
   }
 
-  return { usarServidor, enPunto, viaCercana, division, porCodigo, porNombre, listas, cargarCatalogo, diagnostico, distanciaALinea };
+  return { nombreParecido, usarServidor, enPunto, viaCercana, division, porCodigo, porNombre, listas, cargarCatalogo, diagnostico, distanciaALinea };
 })();
 if (typeof module !== "undefined") module.exports = Capas;

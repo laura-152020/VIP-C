@@ -110,6 +110,7 @@
       const libre = r.viaAuto || (!String(r.codigoVia).trim() && !String(r.nombreTramo).trim());
       if (libre) { r.codigoVia = v.codigo; r.nombreTramo = v.nombre; r.viaAuto = true; cambio = true; }
       else if (!String(r.codigoVia).trim() && v.codigo) { r.codigoVia = v.codigo; cambio = true; } // ej. el sello trae el tramo pero no el código
+      if (r.tramoDe === "ocr" && v.nombre && LectorSello.parecido(v.nombre, r.nombreTramo) >= 0.6) { r.nombreTramo = v.nombre; r.tramoDe = "redvial"; cambio = true; }
       r.viaInfo = `vía ${v.orden.toLowerCase()} a ${Math.round(v.distancia)} m`;
     }
     if (cambio || v) repintarSinPerderFoco(r, repintar);
@@ -375,7 +376,7 @@
       if (x.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(x.tipoAfectacion)) { r.tipoAfectacion = x.tipoAfectacion; cambio = true; }
       if (x.codigoVia && !r.codigoVia) { r.codigoVia = x.codigoVia; cambio = true; }
       // Gemini lee el nombre del tramo mejor que el lector del navegador: si el tramo salió del lector y nadie lo ha cambiado, se reemplaza
-      if (x.tramo && (!r.nombreTramo || (r.tramoDe === "ocr" && !r.viaAuto && x.tramo !== r.nombreTramo && x.tramo.length >= r.nombreTramo.length - 2))) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; cambio = true; }
+      if (x.tramo && (!r.nombreTramo || (r.tramoDe === "ocr" && x.tramo !== r.nombreTramo))) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; cambio = true; }
       // Coordenadas: si las leyó el lector del navegador y Gemini las lee distinto, se confía en Gemini (salvo que la persona las haya cambiado)
       if (x.latitud != null && x.longitud != null && r.coordDe === "ocr" && r.origenUbicacion === "sello" &&
           Math.hypot((x.latitud - r.latitud) * 110574, (x.longitud - r.longitud) * 111320) > 5 && primeroFue === "ocr") {
@@ -401,6 +402,13 @@
     }
     if (!r.fecha && r.exif && r.exif.fecha) r.fecha = r.exif.fecha;
     if (d.tramo && !r.nombreTramo) { r.nombreTramo = d.tramo; r.tramoDe = primero && primero[0] === "gem" && completo(primero[1]) ? "gem" : "ocr"; }
+    // Tramo leído por el lector del navegador: se corrige con el nombre más parecido de la red vial (Circular 10)
+    if (r.tramoDe === "ocr" && typeof Capas !== "undefined") Capas.nombreParecido(r.nombreTramo, 0.7).then((v) => {
+      if (!v || r.tramoDe !== "ocr" || r.estado === "guardado" || r.estado === "guardando") return;
+      r.nombreTramo = v.nombre; r.tramoDe = "redvial";
+      if (!r.codigoVia) r.codigoVia = v.codigo;
+      repintarSinPerderFoco(r, () => actualizar(r));
+    }).catch(() => {});
     if (d.codigoVia && !r.codigoVia) r.codigoVia = d.codigoVia;
     if (d.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(d.tipoAfectacion)) r.tipoAfectacion = d.tipoAfectacion;
     completarDesdeCoordenadas(r);
@@ -656,14 +664,37 @@
     const aviso3 = (t) => { $("#p-fotos").hidden = !t; $("#p-fotos").textContent = t || ""; };
     let encontrados = [], fuente = "";
     if (HAY_BACKEND) {
+      // Las fotos se mandan en grupos de 3, todos al mismo tiempo; cada grupo se aplica apenas responde
       aviso3(`· Gemini está leyendo las ${fotos.length} fotos del PDF…`);
       try {
-        const imgs = await Promise.all(fotos.map((f) => achicar(f.dataUrl, 1400)));
-        const g = await Api.post("leerFotos", { imagenes: imgs });
-        if (g.status === "success" && Array.isArray(g.fotos)) {
+        const imgs = await Promise.all(fotos.map((f) => achicar(f.dataUrl, 1200)));
+        const grupos = [];
+        for (let i = 0; i < imgs.length; i += 3) grupos.push(i);
+        let listos = 0, alguno = false, colaFotos = Promise.resolve();
+        await Promise.all(grupos.map(async (ini) => {
+          const g = await Api.post("leerFotos", { imagenes: imgs.slice(ini, ini + 3) });
+          listos++;
+          if (pdfActual !== pdf) return;
+          aviso3(listos < grupos.length ? `· Gemini está leyendo las fotos del PDF (${Math.min(listos * 3, fotos.length)} de ${fotos.length})…` : "");
+          if (g.status !== "success" || !Array.isArray(g.fotos)) return;
+          alguno = true;
+          const nuevos = g.fotos.filter((x) => x.legible && fotos[ini + x.indice]).map((x) => {
+            const f = fotos[ini + x.indice], pr = LectorPDF.prDe("pr" + String(x.pr || "").replace(/^\s*(pr|k|km)\.?\s*/i, ""));
+            return { lat: x.latitud, lon: x.longitud, fecha: x.fecha || "", pr, foto: f.dataUrl, pagina: f.pagina, seguro: true,
+              nombre: pr ? "PR " + pr : "Foto pág. " + f.pagina, tipo: d.tipoGeneral, descripcion: "" };
+          });
+          encontrados.push(...nuevos);
+          // Se aplican de una vez (mismo PR, cerca de un tramo o punto nuevo)
+          const unicos = [];
+          nuevos.forEach((p) => { if (!unicos.some((u) => (p.pr && u.pr === p.pr) || distanciaM(u, p) < 80)) unicos.push(p); });
+          colaFotos = colaFotos.then(() => sumarPuntosPdf(pdf, d, unicos)); // uno a la vez: evita tramos repetidos
+          await colaFotos;
+        }));
+        if (alguno) {
           fuente = "Gemini";
-          g.fotos.filter((x) => x.legible && fotos[x.indice]).forEach((x) => encontrados.push({
-            lat: x.latitud, lon: x.longitud, fecha: x.fecha || "", pr: LectorPDF.prDe("pr" + String(x.pr || "").replace(/^\s*pr\.?\s*/i, "")), foto: fotos[x.indice].dataUrl, pagina: fotos[x.indice].pagina, seguro: true }));
+          aviso3("");
+          msgPdf(`Fotos del PDF (Gemini): ${fotos.length} revisadas, ${encontrados.length} con coordenadas en el sello.`);
+          return;
         }
       } catch (_) {}
     }
