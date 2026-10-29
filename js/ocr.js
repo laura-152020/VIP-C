@@ -259,11 +259,14 @@ const LectorSello = (function () {
       const m = l.match(/^\W*v[ií1l]a[s]?\b\s*[:.\-]?\s*(.+)$/i);
       if (m && /[a-záéíóúñ]{3}/i.test(m[1])) return { tramo: limpiarTramo(m[1].replace(RE_CODIGO, "")), codigo };
     }
+    // Tramo con varios segmentos: «Porcesito - La Cortada - Yolombó - Vegachí». Se toma el más completo,
+    // aunque la línea traiga ruido con números al comienzo (ej. «7 Porcesito - …»).
+    let cadena = "";
     for (const l of lineas) {
-      if (/\d/.test(l)) continue;
-      const m = l.match(/([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ .]{2,})\s*[-–—]\s*([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñ .]{2,})/);
-      if (m) return { tramo: limpiarTramo(m[0]), codigo };
+      const m = l.match(/[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ .]{2,}(?:\s*[-–—]\s*[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ .]{2,})+/);
+      if (m) { const t = limpiarTramo(m[0]); if (calidadTramo(t) > calidadTramo(cadena)) cadena = t; }
     }
+    if (cadena) return { tramo: cadena, codigo };
     // Respaldo: última línea con palabras (ej. "Grada el peñol"), sin fechas, coordenadas ni el logo
     const RUIDO = /secretar|infraestructura|emergencia|gobernaci|trabajamos|rentan|vial(es)?$/i;
     for (let i = lineas.length - 1; i >= 0; i--) {
@@ -334,7 +337,8 @@ const LectorSello = (function () {
     // [desdeY, hastaY, modo, umbral, desdeX]. Los sellos de cámara suelen ir abajo a la derecha: primero esa zona (menos ruido), luego todo el ancho.
     const intentos = [[0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
     let mejor = null, textos = [], textosN = 0;
-    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[2], intentos[5], intentos[7]] : intentos)) {
+    let tramoAncho = false; // el nombre del tramo leído en una pasada de ancho completo (no recortado a la izquierda)
+    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[2], intentos[5], intentos[7]] : [intentos[0], intentos[2], intentos[1], ...intentos.slice(3)])) {
       const { data } = await w.recognize(franja(img, a, b, modo, umbral, x));
       textos.push(data.text);
       const r = interpretar(data.text);
@@ -344,12 +348,13 @@ const LectorSello = (function () {
         if (r.latitud != null && (mejor.latitud == null || (mejor.coordDudosa && !r.coordDudosa)))
           Object.assign(mejor, { latitud: r.latitud, longitud: r.longitud, latitudDMS: r.latitudDMS, longitudDMS: r.longitudDMS, coordDudosa: r.coordDudosa });
         if (!mejor.fecha && r.fecha) Object.assign(mejor, { fecha: r.fecha, fechaTexto: r.fechaTexto });
-        if (r.tramo && calidadTramo(r.tramo) > calidadTramo(mejor.tramo)) mejor.tramo = r.tramo;
+        if (r.tramo && (calidadTramo(r.tramo) > calidadTramo(mejor.tramo) || (!x && r.tramo.length > (mejor.tramo || "").length && calidadTramo(r.tramo) >= calidadTramo(mejor.tramo)))) mejor.tramo = r.tramo;
         if (!mejor.codigoVia && r.codigoVia) mejor.codigoVia = r.codigoVia;
         if (!mejor.municipioTexto && r.municipioTexto) mejor.municipioTexto = r.municipioTexto;
       }
       textosN = textos.length;
-      if (puntaje(mejor) >= 7) break;
+      if (!x && r.tramo) tramoAncho = true;
+      if (puntaje(mejor) >= 7 && (tramoAncho || rapido)) break;
       if (rapido && mejor.latitud != null && !mejor.coordDudosa) break;
       if (textosN >= 3 && mejor.fecha && mejor.tramo && mejor.latitud == null) break; // sello sin coordenadas: no insistir
       if (textosN >= 4 && mejor.fecha && mejor.latitud != null) break;                 // lectura dudosa: no alargar más

@@ -206,6 +206,7 @@
       r.origenUbicacion = "manual";
       const c = $("[data-coord]", contenedor); if (c) c.innerHTML = lineaCoord(r);
     }
+    if (k === "nombreTramo") r.tramoDe = "";
     if (k === "codigoVia" || k === "nombreTramo") { r.viaAuto = false; r.viaInfo = ""; if (k === r.relCampo) r.relAuto = false; }
     if (k === "municipio") { r.municipioAuto = false; const m = MUN_POR_NOMBRE[norm(r.municipio)]; if (m) { r.subregion = m.s; const s = $('[data-k="subregion"]', contenedor); if (s) s.value = m.s; } }
   }
@@ -358,6 +359,7 @@
     const pOcr = LectorSello.leer(r.dataUrl).catch((e) => { error = e.message || "No se pudo leer la foto."; return null; }).finally(() => aviso(""));
     const sinVacios = (x) => Object.fromEntries(Object.entries(x || {}).filter(([, v]) => v != null && v !== ""));
     const primero = await Promise.race([pGem.then((x) => ["gem", x]), pOcr.then((x) => ["ocr", x])]);
+    const primeroFue = completo(primero[1]) ? primero[0] : "mezcla";
     let d, tarde = null;
     if (completo(primero[1])) {
       d = primero[1];
@@ -372,7 +374,17 @@
       let cambio = false;
       if (x.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(x.tipoAfectacion)) { r.tipoAfectacion = x.tipoAfectacion; cambio = true; }
       if (x.codigoVia && !r.codigoVia) { r.codigoVia = x.codigoVia; cambio = true; }
-      if (x.tramo && !r.nombreTramo) { r.nombreTramo = x.tramo; cambio = true; }
+      // Gemini lee el nombre del tramo mejor que el lector del navegador: si el tramo salió del lector y nadie lo ha cambiado, se reemplaza
+      if (x.tramo && (!r.nombreTramo || (r.tramoDe === "ocr" && !r.viaAuto && x.tramo !== r.nombreTramo && x.tramo.length >= r.nombreTramo.length - 2))) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; cambio = true; }
+      // Coordenadas: si las leyó el lector del navegador y Gemini las lee distinto, se confía en Gemini (salvo que la persona las haya cambiado)
+      if (x.latitud != null && x.longitud != null && r.coordDe === "ocr" && r.origenUbicacion === "sello" &&
+          Math.hypot((x.latitud - r.latitud) * 110574, (x.longitud - r.longitud) * 111320) > 5 && primeroFue === "ocr") {
+        r.latitud = x.latitud; r.longitud = x.longitud;
+        r.latitudDMS = x.latitudDMS && /[°NS]/.test(x.latitudDMS) ? x.latitudDMS : decimalADMS(x.latitud, true);
+        r.longitudDMS = x.longitudDMS && /[°WOE]/.test(x.longitudDMS) ? x.longitudDMS : decimalADMS(x.longitud, false);
+        r.coordDe = "gem"; cambio = true;
+        enriquecer(r, () => actualizar(r));
+      }
       if (cambio) repintarSinPerderFoco(r, () => actualizar(r));
     });
     d = d || {};
@@ -381,14 +393,14 @@
       r.latitud = d.latitud; r.longitud = d.longitud;
       r.latitudDMS = d.latitudDMS && /[°NS]/.test(d.latitudDMS) ? d.latitudDMS : decimalADMS(d.latitud, true);
       r.longitudDMS = d.longitudDMS && /[°WOE]/.test(d.longitudDMS) ? d.longitudDMS : decimalADMS(d.longitud, false);
-      r.origenUbicacion = "sello";
+      r.origenUbicacion = "sello"; r.coordDe = primeroFue === "gem" ? "gem" : "ocr";
     } else if (r.exif && r.exif.lat != null) {
       r.latitud = r.exif.lat; r.longitud = r.exif.lon;
       r.latitudDMS = decimalADMS(r.latitud, true); r.longitudDMS = decimalADMS(r.longitud, false);
       r.origenUbicacion = "gps";
     }
     if (!r.fecha && r.exif && r.exif.fecha) r.fecha = r.exif.fecha;
-    if (d.tramo && !r.nombreTramo) r.nombreTramo = d.tramo;
+    if (d.tramo && !r.nombreTramo) { r.nombreTramo = d.tramo; r.tramoDe = primero && primero[0] === "gem" && completo(primero[1]) ? "gem" : "ocr"; }
     if (d.codigoVia && !r.codigoVia) r.codigoVia = d.codigoVia;
     if (d.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(d.tipoAfectacion)) r.tipoAfectacion = d.tipoAfectacion;
     completarDesdeCoordenadas(r);
@@ -655,16 +667,34 @@
         }
       } catch (_) {}
     }
+    let motivoSinGemini = "";
     if (!fuente) {
       fuente = "lector del navegador";
+      if (HAY_BACKEND) motivoSinGemini = " Gemini no respondió; si el mensaje persiste, actualiza el Apps Script a la última versión.";
+      // Se aplica cada lectura apenas sale (no al final): una foto con el PR de una sección o cerca de un tramo del acta
+      // se usa de una vez; las demás esperan a que otra foto coincida en el mismo sitio.
+      const pendientes = [];
       for (let i = 0; i < fotos.length; i++) {
         if (pdfActual !== pdf) return;
         aviso3(`· Leyendo las fotos del PDF (${i + 1} de ${fotos.length})…`);
         let o = null;
         try { o = await LectorSello.leer(fotos[i].dataUrl, { rapido: true }); } catch (_) {}
-        if (o && o.latitud != null && o.longitud != null && !o.coordDudosa)
-          encontrados.push({ lat: o.latitud, lon: o.longitud, fecha: o.fecha || "", pr: LectorPDF.prDe(o.textoLeido), foto: fotos[i].dataUrl, pagina: fotos[i].pagina, seguro: false });
+        if (!(o && o.latitud != null && o.longitud != null && !o.coordDudosa)) continue;
+        const p = { lat: o.latitud, lon: o.longitud, fecha: o.fecha || "", pr: LectorPDF.prDe(o.textoLeido), foto: fotos[i].dataUrl, pagina: fotos[i].pagina, seguro: false,
+          tipo: d.tipoGeneral, descripcion: "" };
+        p.nombre = p.pr ? "PR " + p.pr : "Foto pág. " + p.pagina;
+        encontrados.push(p);
+        const prOk = p.pr && tramosPdf.some((r) => r.pr === p.pr);
+        const cerca = tramosPdf.some((r) => tieneCoord(r) && distanciaM({ lat: r.latitud, lon: r.longitud }, p) < 150);
+        if (prOk || cerca) { p.usado = true; await sumarPuntosPdf(pdf, d, [p]); continue; }
+        const par = pendientes.find((q) => distanciaM(q, p) < 80);
+        if (par) { p.usado = par.usado = true; await sumarPuntosPdf(pdf, d, [par]); } else pendientes.push(p);
       }
+      aviso3("");
+      const usados = encontrados.filter((p) => p.usado).length;
+      msgPdf(`Fotos del PDF (lector del navegador): ${fotos.length} revisadas, ${encontrados.length} con coordenadas en el sello, ${usados} usadas` +
+        (encontrados.length - usados ? ` (${encontrados.length - usados} descartadas por lectura dudosa)` : "") + "." + motivoSinGemini, !!motivoSinGemini);
+      return;
     }
     aviso3("");
     if (pdfActual !== pdf) return;
