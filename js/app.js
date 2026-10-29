@@ -735,6 +735,7 @@
     })();
 
     // 2) Lector del navegador, foto por foto (rápido con el sello estándar)
+    const lecturas = []; // lecturas del navegador que esperan confirmación
     const tLector = (async () => {
       for (let i = 0; i < fotos.length; i++) {
         if (pdfActual !== pdf) return;
@@ -745,8 +746,16 @@
         let o = null;
         try { o = await LectorSello.leer(fotos[i].dataUrl, { rapido: true }); } catch (_) {}
         // Solo sellos de foto de campo: fecha + coordenadas, sin dudas de lectura
-        if (o && o.latitud != null && o.longitud != null && !o.coordDudosa && o.fecha && !aplicado[i])
-          await aplicar(i, { lat: o.latitud, lon: o.longitud, fecha: o.fecha, pr: LectorPDF.prDe(o.textoLeido) }, "lector");
+        if (!(o && o.latitud != null && o.longitud != null && !o.coordDudosa && o.fecha) || aplicado[i]) continue;
+        const x = { i, lat: o.latitud, lon: o.longitud, fecha: o.fecha, pr: LectorPDF.prDe(o.textoLeido) };
+        // En fotos pequeñas el lector puede confundir un número: se acepta si la foto es grande o si otra foto coincide (< 60 m)
+        const grande = Math.max(fotos[i].ancho, fotos[i].alto) >= 1000;
+        const coincide = lecturas.find((y) => y.i !== i && distanciaM(y, x) < 60) || Object.values(aplicado).find((y) => distanciaM(y, x) < 60);
+        lecturas.push(x);
+        if (grande || coincide) {
+          await aplicar(i, x, "lector");
+          if (coincide && coincide.i != null && !aplicado[coincide.i]) await aplicar(coincide.i, coincide, "lector");
+        }
       }
     })();
 

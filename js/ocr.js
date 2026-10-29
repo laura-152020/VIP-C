@@ -36,7 +36,7 @@ const LectorSello = (function () {
     const sw = img.naturalWidth || img.width, sh = img.naturalHeight || img.height;
     const y0 = Math.round(sh * desdeY), alto = Math.round(sh * (hastaY - desdeY));
     const x0 = Math.round(sw * desdeX), ancho = sw - x0;
-    const escala = Math.min(3, Math.max(1, 2200 / sw));
+    const escala = Math.min(sw < 900 ? 4 : 3, Math.max(1, 2200 / sw)); // fotos pequeñas (ej. dentro de un PDF): más ampliación
     const c = document.createElement("canvas");
     c.width = Math.round(ancho * escala); c.height = Math.round(alto * escala);
     const ctx = c.getContext("2d", { willReadFrequently: true });
@@ -251,7 +251,8 @@ const LectorSello = (function () {
     return null;
   }
 
-  const RE_CODIGO = /\b(\d[0-9O]\s?[A-Z]{2}\s?[0-9O]{2})\b/i; // código de vía departamental, ej. 60AN17 (el OCR puede leer 0 como O)
+  // Código de vía departamental: 60AN17 · 60AN16-1 · 62AN09-2 (el OCR puede leer 0 como O)
+  const RE_CODIGO = /\b(\d[0-9O]\s?[A-Z]{2}\s?[0-9O]{2}(?:\s?-\s?[0-9O]{1,2})?)(?![0-9A-Z])/i;
   const limpiarCodigo = (c) => { const x = c.toUpperCase().replace(/\s/g, ""); return x.slice(0, 2).replace(/O/g, "0") + x.slice(2, 4) + x.slice(4).replace(/O/g, "0"); };
   function buscarTramo(texto) {
     const lineas = normalizar(texto).split("\n").map((l) => l.trim()).filter(Boolean);
@@ -342,26 +343,33 @@ const LectorSello = (function () {
   // En el formato de sello estándar, el tramo es la línea que va debajo de las coordenadas (puede ser una sola palabra, ej. «Remedios»)
   function tramoBajoCoordenadas(texto) {
     const lineas = normalizar(texto).split("\n").map((l) => l.trim()).filter(Boolean);
+    // Línea de coordenadas: dos bloques de grados con N/S y W/O (el hemisferio puede ir antes o después)
     let k = -1;
-    lineas.forEach((l, i) => { if (/\d{1,3}\s*[°º*%"']?\s*\d{1,2}.{0,40}[NS].{0,30}\d{2,3}\s*[°º*%"']?\s*\d{1,2}.{0,40}[WO]/i.test(l)) k = i; });
+    k = lineas.findIndex((l) => !!buscarCoordenadas(l)); // la primera línea donde se leen coordenadas completas
     if (k < 0 || k + 1 >= lineas.length) return "";
-    let t = lineas[k + 1];
-    if (/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(t)) return "";        // es la fecha, no el tramo
+    if (/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(lineas[k + 1])) return ""; // es la fecha, no el tramo
+    // El tramo puede ocupar varias líneas (ej. «60AN16-1 - Granada - El Chocó - San» / «Carlos» / «PR 18+200»)
+    let t = lineas.slice(k + 1, k + 4).filter((l) => !/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(l)).join(" ");
+    t = t.replace(/\b(?:pr|k|km|abs(?:cisa)?)\s*\.?\s*\d{1,3}\s*\+\s*\d{1,3}\b.*$/i, "")   // abscisa PR y lo que siga
+      .replace(new RegExp(RE_CODIGO.source, "i"), " ")                                      // código de la vía (va en su propia casilla)
+      .replace(/^[\s\-–—]+/, "");
     t = t.replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]+/, "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ.)]+$/, "");
     const toks = t.split(/\s+/);
     while (toks.length && !/^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]/.test(toks[0])) toks.shift();       // ruido antes de la primera palabra con mayúscula
     t = limpiarTramo(toks.join(" "));
+    const conector = /^(de|del|la|las|el|los|y)$/i, palabraNombre = (w) => /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}$/.test(w) || conector.test(w);
     if (/ - /.test(t)) {
       // Tramo con segmentos: desde el primer segmento con mayúscula hasta el final
       const m = t.match(/[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ .]{2,}(?:\s*-\s*[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ .]{2,})+$/);
       if (m) t = m[0].trim();
     } else if (typeof MUNICIPIOS !== "undefined") {
-      // Una sola parte (ej. «Remedios»): el ruido del fondo queda a la izquierda; si termina en un municipio, se deja solo el municipio
+      // Una sola parte con ruido del fondo a la izquierda (ej. «Dolar NY E Remedios»): se deja el municipio del final.
+      // Si todo son palabras de nombre (ej. «Granada San Carlos»), se deja completo.
       const w = t.split(/\s+/);
       for (let n = Math.min(4, w.length); n >= 1; n--) {
         const cola = w.slice(-n).join(" ");
         const m = MUNICIPIOS.find((x) => parecido(cola, x.n) >= 0.8);
-        if (m) { t = m.n; break; }
+        if (m) { if (n === w.length || !w.slice(0, -n).every(palabraNombre)) t = m.n; break; }
       }
     }
     const palabras = t.split(/[\s-]+/).filter((w) => /^[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}$/.test(w) && /[aeiouáéíóú]/i.test(w));
@@ -393,10 +401,10 @@ const LectorSello = (function () {
     // Formato de sello usado por todos (abajo a la derecha, texto blanco con sombra):
     //   «26/10/26, 10:36 a.m.» · «6° 38' 21.075" N, 74° 53' 24.732" W» · «Porcesito - La Cortada - Yolombó - Vegachí»
     // Primero se lee solo esa franja (más rápido y con menos ruido); si no basta, las pasadas generales.
-    const intentos = [[0.78, 1, "blanco", 225, 0.25], [0.78, 1, "sombra", 200, 0.25], [0.78, 1, "adapt", 0, 0.25], [0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
+    const intentos = [[0.78, 1, "blanco", 225, 0.25], [0.78, 1, "sombra", 200, 0.25], [0.78, 1, "adapt", 0, 0.25], [0.75, 1, "blanco", 190, 0.2], [0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
     let mejor = null, textos = [], textosN = 0;
     let tramoAncho = false; // el nombre del tramo leído en una pasada de ancho completo (no recortado a la izquierda)
-    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[1], intentos[3], intentos[5]] : intentos)) {
+    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[1], intentos[3], intentos[2]] : intentos)) {
       const { data } = await w.recognize(franja(img, a, b, modo, umbral, x));
       textos.push(data.text);
       const r = interpretar(data.text);
