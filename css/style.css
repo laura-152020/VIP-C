@@ -187,3 +187,21 @@ img{-webkit-user-drag:none}
 .girando{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--brand);animation:girar .8s linear infinite;flex:none}
 @keyframes girar{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.girando{animation:none}}
+/* Sección 3 organizada: resumen, pestañas de tramo, vista del PDF a la izquierda y formulario a la derecha */
+.pdf-resumen{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;color:var(--muted)}
+.pdf-resumen b{color:var(--ink);font-weight:600}
+.pdf-cuerpo{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start}
+.pdf-cuerpo:has(.pdf-vista[hidden]){grid-template-columns:minmax(0,1fr)}
+.pdf-vista{display:grid;gap:8px;justify-items:start;position:sticky;top:12px}
+.pdf-vista__img{padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff;cursor:zoom-in;width:100%}
+.pdf-vista__img img{display:block;width:100%;height:auto}
+.tramo .est{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--warn);vertical-align:middle}
+.tramo .est.ok{background:#3fa766}
+.tramo.is-sel .est{box-shadow:0 0 0 2px var(--brand-ink)}
+@media (max-width:760px){.pdf-cuerpo{grid-template-columns:1fr}.pdf-vista{position:static;grid-template-columns:110px 1fr;align-items:center}.pdf-vista__img{grid-row:span 2}}
+.visor--pdf{width:min(980px,96vw)}
+.vp-paginas{display:grid;gap:14px;max-height:86vh;overflow:auto;padding:4px 2px 12px}
+.vp-pagina{background:#fff;border-radius:4px;scroll-margin-top:8px}
+.vp-pagina img{display:block;width:100%;height:auto;max-width:none;max-height:none;border-radius:4px}
+.vp-pagina span{display:block;color:#fff;font-size:12px;padding:4px 0;background:#111}
+.vp-pagina.is-actual{outline:3px solid var(--sign)}

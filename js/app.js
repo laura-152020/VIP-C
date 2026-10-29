@@ -473,18 +473,62 @@
       : r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : "") + campos(r, "p-");
     const t = $("#p-tramos");
     t.hidden = tramosPdf.length < 2;
-    t.innerHTML = tramosPdf.map((x, i) => `<button type="button" class="tramo${i === selPdf ? " is-sel" : ""}${x.agregado ? " is-ok" : ""}" data-i="${i}"${x.agregado ? " disabled" : ""}>${x.agregado ? "✓ " : ""}${esc(x.punto)}</button>`).join("");
+    // Pestañas: punto verde = tiene coordenadas, naranja = le faltan; ✓ = ya se agregó
+    t.innerHTML = tramosPdf.map((x, i) => `<button type="button" class="tramo${i === selPdf ? " is-sel" : ""}${x.agregado ? " is-ok" : ""}" data-i="${i}"${x.agregado ? " disabled" : ""} title="${tieneCoord(x) ? "Con coordenadas" : "Sin coordenadas todavía"}">${x.agregado ? "✓ " : `<span class="est${tieneCoord(x) ? " ok" : ""}"></span>`}${esc(x.punto)}</button>`).join("");
+    // Resumen del documento
+    const res = $("#p-resumen");
+    if (pdfActual && pdfActual.d) {
+      const d = pdfActual.d, conC = tramosPdf.filter(tieneCoord).length;
+      res.hidden = false;
+      res.innerHTML = [`<span><b>${esc(pdfActual.nombre)}</b> · ${pdfActual.doc.numPages} página(s)</span>`,
+        d.fecha ? `<span>Fecha: <b>${esc(d.fecha.split("-").reverse().join("/"))}</b></span>` : "",
+        d.codigoVia || d.via ? `<span>Vía: <b>${esc([d.codigoVia, d.via].filter(Boolean).join(" · "))}</b></span>` : "",
+        `<span>Tramos: <b>${tramosPdf.length}</b> · con coordenadas: <b>${conC}</b>${tramosPdf.some((x) => x.agregado) ? ` · agregados: <b>${tramosPdf.filter((x) => x.agregado).length}</b>` : ""}</span>`].filter(Boolean).join("");
+    } else { res.hidden = true; res.innerHTML = ""; }
+    // Vista de la página del tramo (o de su foto) al lado del formulario
+    const vista = $("#p-vista");
+    vista.hidden = !(pdfActual && r.miniatura);
+    if (!vista.hidden) {
+      $("#p-miniatura").src = r.miniatura; $("#p-miniatura").alt = "Página " + (r.pagina || 1) + " del PDF";
+      $("#p-pagina").textContent = `${r.fotoPropia ? "Foto del sello · " : ""}página ${r.pagina || 1} de ${pdfActual.doc.numPages}`;
+    }
     const quedan = tramosPdf.filter((x) => !x.agregado).length;
     $("#p-todos").hidden = quedan < 2;
     $("#p-todos").textContent = `Agregar los ${quedan} tramos`;
-    $("#p-ver").hidden = !r.dataUrl;
+
   }
   formPdf.addEventListener("input", (e) => alEditar(regPdf(), e.target, formPdf, pintarPdf));
   formPdf.addEventListener("change", (e) => alCambiar(regPdf(), e.target, pintarPdf));
   $("#p-tramos").addEventListener("click", (e) => { const b = e.target.closest("[data-i]"); if (!b) return; selPdf = Number(b.dataset.i); pintarPdf(); });
-  $("#p-ver").addEventListener("click", () => { const r = regPdf(); abrirVisor(r.dataUrl, r.nombreArchivo + " · " + r.punto + " (página " + r.pagina + ")"); });
+  // PDF completo: todas las páginas en una ventana, abierta en la página del tramo
+  async function abrirPdfCompleto() {
+    const pdf = pdfActual; if (!pdf) return;
+    const dlg = $("#visor-pdf"), cont = $("#vp-paginas"), pag = regPdf().pagina || 1;
+    $("#vp-nombre").textContent = pdf.nombre + " · " + pdf.doc.numPages + " página(s)";
+    if (cont.dataset.pdf !== pdf.nombre + pdf.base64.length) {
+      cont.dataset.pdf = pdf.nombre + pdf.base64.length;
+      let prop = "612 / 792"; // tamaño carta, mientras se dibuja
+      try { const v = (await pdf.doc.getPage(1)).getViewport({ scale: 1 }); prop = `${Math.round(v.width)} / ${Math.round(v.height)}`; } catch (_) {}
+      cont.innerHTML = Array.from({ length: pdf.doc.numPages }, (_, i) => `<div class="vp-pagina" data-n="${i + 1}"><span>Página ${i + 1}</span><img alt="Página ${i + 1}" style="aspect-ratio:${prop}"></div>`).join("");
+    }
+    cont.querySelectorAll(".vp-pagina").forEach((el) => el.classList.toggle("is-actual", Number(el.dataset.n) === pag));
+    if (dlg.showModal && !dlg.open) dlg.showModal();
+    const actual = cont.querySelector(`.vp-pagina[data-n="${pag}"]`); if (actual) actual.scrollIntoView({ block: "start" });
+    // Dibuja primero la página del tramo y luego las demás
+    const orden = [pag, ...Array.from({ length: pdf.doc.numPages }, (_, i) => i + 1).filter((n) => n !== pag)];
+    for (const n of orden) {
+      const img = cont.querySelector(`.vp-pagina[data-n="${n}"] img`);
+      if (!img || img.getAttribute("src") || pdfActual !== pdf || !dlg.open) continue;
+      try { img.src = await LectorPDF.dibujarPagina(pdf.doc, n, 1000); } catch (_) {}
+      if (n === pag && actual) actual.scrollIntoView({ block: "start" });
+    }
+  }
+  $("#p-ver").addEventListener("click", abrirPdfCompleto);
+  $("#p-ver-img").addEventListener("click", abrirPdfCompleto);
+  $("#vp-cerrar").addEventListener("click", () => $("#visor-pdf").close());
+  $("#visor-pdf").addEventListener("click", (e) => { if (e.target.id === "visor-pdf") e.target.close(); });
 
-  function limpiarPdf() { pdfActual = null; tramosPdf = []; selPdf = 0; vacioPdf = nuevoRegistro({ origen: "pdf" }); $("#p-archivo").textContent = "Ningún archivo seleccionado"; pintarPdf(); msgPdf(""); }
+  function limpiarPdf() { $("#vp-paginas").innerHTML = ""; delete $("#vp-paginas").dataset.pdf; pdfActual = null; tramosPdf = []; selPdf = 0; vacioPdf = nuevoRegistro({ origen: "pdf" }); $("#p-archivo").textContent = "Ningún archivo seleccionado"; pintarPdf(); msgPdf(""); }
   $("#p-limpiar").addEventListener("click", limpiarPdf);
 
   function pasarALista(lista) {
@@ -820,6 +864,9 @@
     $("#n-leyendo").textContent = leyendo ? "· " + leyendo + " leyendo" : "";
     $("#resumen").textContent = items.length ? `${items.length} en la lista${HAY_BACKEND ? " · " + guardados + " guardados" : ""}` : "";
     $("#guardar").disabled = !p || guardando;
+    // Sin pendientes no hay nada que guardar: el botón lo dice claro en vez de verse apagado sin explicación
+    $("#guardar").textContent = guardando ? "Guardando…" : (!p && guardados ? "✓ Todo guardado" : (p > 1 ? `Guardar ${p} pendientes` : "Guardar datos"));
+    $("#guardar").title = !p ? (guardados ? "Todos los registros ya están guardados en Drive, Sheets y ArcGIS." : "Agrega un registro desde las secciones 1, 2 o 3.") : "Guarda los registros pendientes o con error.";
   }
 
   const buscar = (el) => items.find((x) => x.id == el.closest(".card")?.dataset.id);

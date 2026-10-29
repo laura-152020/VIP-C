@@ -8,15 +8,15 @@
   <!-- Seguridad: solo se cargan scripts y conexiones de estos orígenes -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' blob:; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://services5.arcgis.com https://cdn.jsdelivr.net data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=7.6">
+  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=7.8">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/style.css?v=7.6">
+  <link rel="stylesheet" href="css/style.css?v=7.8">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar__in">
-      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=7.6" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
+      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=7.8" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
       <div class="marca">
         <div class="marca__sigla">VIP-C</div>
         <div class="marca__nombre">Visor interactivo de puntos críticos</div>
@@ -139,19 +139,33 @@
         <h2 id="h-pdf"><span class="num">3</span> Subir PDF · lectura de PDF</h2>
         <span class="hint">Actas e informes de visita técnica</span>
       </div>
+
+      <!-- Paso 1: elegir el PDF -->
       <div class="pdf-carga">
         <label class="btn" for="archivos-pdf">Elegir PDF</label>
         <input id="archivos-pdf" class="oculto" type="file" accept="application/pdf,.pdf">
         <span id="p-archivo" class="hint">Ningún archivo seleccionado</span>
-        <span id="p-ia" class="hint" hidden>· Gemini está redactando el resumen…</span>
+        <span id="p-ia" class="hint" hidden>· Gemini está leyendo el documento…</span>
         <span id="p-fotos" class="hint" hidden></span>
       </div>
+
+      <!-- Paso 2: resumen de lo que se encontró -->
+      <div id="p-resumen" class="pdf-resumen" hidden></div>
+
+      <!-- Paso 3: un tramo a la vez -->
       <div id="p-tramos" class="tramos" hidden></div>
-      <div id="form-pdf" class="campos"></div>
+      <div class="pdf-cuerpo">
+        <aside id="p-vista" class="pdf-vista" hidden>
+          <button type="button" class="pdf-vista__img" id="p-ver-img" aria-label="Ver el PDF completo"><img id="p-miniatura" alt=""></button>
+          <span id="p-pagina" class="hint"></span>
+          <button id="p-ver" type="button" class="btn btn--sm">Ver PDF completo</button>
+        </aside>
+        <div id="form-pdf" class="campos"></div>
+      </div>
+
       <div class="actions">
         <button id="p-agregar" type="button" class="btn btn--primary">Agregar a la lista</button>
         <button id="p-todos" type="button" class="btn" hidden>Agregar todos los tramos</button>
-        <button id="p-ver" type="button" class="btn" hidden>Ver página del PDF</button>
         <button id="p-limpiar" type="button" class="btn btn--ghost">Limpiar</button>
         <span id="p-msg" class="hint" role="status"></span>
       </div>
@@ -167,6 +181,11 @@
       <div id="tarjetas" class="tarjetas"></div>
     </section>
   </main>
+
+  <dialog id="visor-pdf" class="visor visor--pdf" aria-label="PDF completo">
+    <div class="visor__bar"><span id="vp-nombre"></span><button type="button" id="vp-cerrar">Cerrar</button></div>
+    <div id="vp-paginas" class="vp-paginas"></div>
+  </dialog>
 
   <dialog id="visor" class="visor" aria-label="Foto ampliada">
     <div class="visor__bar"><span id="visor-nombre"></span><button type="button" id="visor-cerrar">Cerrar</button></div>
@@ -187,12 +206,12 @@
 
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js" integrity="sha384-KRanV2NRwHPanp7iM6nlLQC5jPCTscSYMko30dLJHzNXJaUNtcucWv+SOi3jV3PE" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js" integrity="sha384-r1ru3tcf6FhnCFR4B7pIFG+BhFF9LlFtz/P1y4pblWn3AGs9y3lBx5SKLNf4+rED" crossorigin="anonymous"></script>
-  <script src="js/proteccion.js?v=7.6"></script>
-  <script src="js/config.js?v=7.6"></script>
-  <script src="js/municipios.js?v=7.6"></script>
-  <script src="js/ocr.js?v=7.6"></script>
-  <script src="js/lectorpdf.js?v=7.6"></script>
-  <script src="js/capas.js?v=7.6"></script>
-  <script src="js/app.js?v=7.6"></script>
+  <script src="js/proteccion.js?v=7.8"></script>
+  <script src="js/config.js?v=7.8"></script>
+  <script src="js/municipios.js?v=7.8"></script>
+  <script src="js/ocr.js?v=7.8"></script>
+  <script src="js/lectorpdf.js?v=7.8"></script>
+  <script src="js/capas.js?v=7.8"></script>
+  <script src="js/app.js?v=7.8"></script>
 </body>
 </html>
