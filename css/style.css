@@ -180,3 +180,6 @@ textarea{min-height:64px;resize:vertical}
 body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
 input,textarea,select,[contenteditable="true"]{-webkit-user-select:text;user-select:text}
 img{-webkit-user-drag:none}
+.zona-pegar{flex:1 1 260px;min-height:44px;border:1px dashed var(--line);border-radius:8px;padding:11px 12px;color:var(--muted);font-size:14px;cursor:text;outline:none;caret-color:transparent;overflow:hidden;white-space:nowrap}
+.zona-pegar:empty::before{content:"Pega aquí una imagen copiada: haz clic y presiona Ctrl+V (en el celular, mantén presionado y elige «Pegar»)";white-space:normal;display:block}
+.zona-pegar:focus{border-color:var(--brand);border-style:solid;background:var(--sign-soft)}

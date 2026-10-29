@@ -260,7 +260,9 @@
       enriquecer(manual, pintarManual);
       msgManual(`Ubicación tomada (precisión aprox. ${Math.round(pos.coords.accuracy)} m).`);
     }, (err) => {
-      msgManual(err.code === 1 ? "Permiso de ubicación denegado. Escribe las coordenadas a mano." : "No se pudo obtener la ubicación. Escribe las coordenadas a mano.", true);
+      const enMarco = window.self !== window.top; // VIP-C dentro de ArcGIS Experience: el visor puede no compartir la ubicación
+      msgManual((err.code === 1 ? "Permiso de ubicación denegado. Escribe las coordenadas a mano." : "No se pudo obtener la ubicación. Escribe las coordenadas a mano.")
+        + (enMarco ? " Si estás dentro del visor de ArcGIS, abre VIP-C en una pestaña aparte para usar tu ubicación." : ""), true);
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
   });
 
@@ -771,37 +773,84 @@
   ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("is-over"); }));
   ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("is-over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer?.files?.length) agregarFotos([...e.dataTransfer.files]); });
-  /* Pegar imágenes o PDF copiados (Ctrl+V o botón), sin tener que descargarlos primero */
+  /* Pegar imágenes o PDF copiados, sin tener que descargarlos primero.
+     Funciona con Ctrl+V en cualquier parte de la página, con la caja «Pega aquí» (también en el celular:
+     mantener presionado → Pegar) y con el botón, cuando el navegador lo permite. */
+  const msgF = (t, e) => { const fm = $("#f-msg"); fm.textContent = t || ""; fm.style.color = e ? "var(--err)" : ""; };
   function nombrePegado(f, i) {
     const d = new Date(), z = (n) => String(n).padStart(2, "0");
     const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
     return new File([f], `pegada_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}${i ? "_" + (i + 1) : ""}.${ext}`, { type: f.type });
   }
-  function recibirPegados(files) {
-    const imgs = files.filter((f) => /^image\/(jpeg|png|webp)$/.test(f.type)), pdfs = files.filter((f) => f.type === "application/pdf");
-    if (imgs.length) { agregarFotos(imgs.map(nombrePegado)); $("#seccion-fotos").scrollIntoView({ behavior: "smooth", block: "start" }); }
+  // Imágenes en otros formatos (GIF, BMP, TIFF de algunos programas) se convierten a JPG
+  async function aImagenCompatible(f) {
+    if (/^image\/(jpeg|png|webp)$/.test(f.type)) return f;
+    try {
+      const bmp = await createImageBitmap(f);
+      const cv = document.createElement("canvas"); cv.width = bmp.width; cv.height = bmp.height;
+      cv.getContext("2d").drawImage(bmp, 0, 0);
+      const blob = await new Promise((ok) => cv.toBlob(ok, "image/jpeg", 0.92));
+      return blob ? new File([blob], "pegada.jpg", { type: "image/jpeg" }) : null;
+    } catch (_) { return null; }
+  }
+  async function recibirPegados(files) {
+    const imgs = (await Promise.all(files.filter((f) => /^image\//.test(f.type)).map(aImagenCompatible))).filter(Boolean);
+    const pdfs = files.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
+    if (imgs.length) { msgF(imgs.length === 1 ? "Imagen pegada. Leyendo el sello…" : imgs.length + " imágenes pegadas. Leyendo los sellos…"); agregarFotos(imgs.map(nombrePegado)); $("#seccion-fotos").scrollIntoView({ behavior: "smooth", block: "start" }); }
     if (pdfs.length) { cargarPDF(pdfs[0]); $("#pdfs").scrollIntoView({ behavior: "smooth", block: "start" }); }
     return imgs.length + pdfs.length;
   }
-  document.addEventListener("paste", (e) => {
+  // Saca los archivos de lo pegado: archivos, elementos de tipo archivo o imágenes incrustadas (data:)
+  function archivosDe(dt) {
+    const out = [...((dt && dt.files) || [])];
+    if (!out.length && dt && dt.items) for (const it of dt.items) { if (it.kind === "file") { const f = it.getAsFile(); if (f) out.push(f); } }
+    if (!out.length && dt) {
+      const html = dt.getData("text/html") || "";
+      const m = html.match(/<img[^>]+src="(data:image\/[a-z]+;base64,[^"]+)"/i);
+      if (m) {
+        const [cab, b64] = m[1].split(","), tipo = cab.slice(5, cab.indexOf(";"));
+        const bin = atob(b64), u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        out.push(new File([u8], "pegada", { type: tipo }));
+      } else if (/<img[^>]+src="https?:/i.test(html)) out.enlaceWeb = true;
+    }
+    return out;
+  }
+  document.addEventListener("paste", async (e) => {
     if ($("#app").hidden) return;
-    const files = [...((e.clipboardData && e.clipboardData.files) || [])];
-    if (!files.length) return; // texto normal: se pega como siempre
-    if (recibirPegados(files)) e.preventDefault();
+    const zona = e.target && e.target.closest && e.target.closest("#zona-pegar");
+    const files = archivosDe(e.clipboardData);
+    if (zona) e.preventDefault(); // la caja nunca guarda texto
+    if (!files.length) {
+      if (zona) msgF(files.enlaceWeb
+        ? "Eso es un enlace a una imagen de una página web. Abre la imagen, haz clic derecho → «Copiar imagen» y vuelve a pegar."
+        : "No hay ninguna imagen copiada. Copia la foto (clic derecho → «Copiar imagen») y vuelve a pegar.", true);
+      return; // fuera de la caja, el texto se pega normal en las casillas
+    }
+    e.preventDefault();
+    if (!(await recibirPegados(files))) msgF("Lo que pegaste no es una imagen ni un PDF.", true);
   });
+  const zonaPegar = $("#zona-pegar");
+  zonaPegar.addEventListener("keydown", (e) => { // solo deja pegar (Ctrl+V / Cmd+V / Shift+Insert), no escribir
+    const ctrl = e.ctrlKey || e.metaKey, k = (e.key || "").toLowerCase();
+    if (!((ctrl && k === "v") || (e.shiftKey && k === "insert") || k === "tab")) e.preventDefault();
+  });
+  zonaPegar.addEventListener("input", () => { zonaPegar.textContent = ""; });
+  zonaPegar.addEventListener("drop", (e) => { e.preventDefault(); const f = archivosDe(e.dataTransfer); if (f.length) recibirPegados(f); });
   $("#pegar-foto").addEventListener("click", async () => {
-    const fm = $("#f-msg");
     try {
-      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("no");
+      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("sin permiso");
       const items = await navigator.clipboard.read(), files = [];
       for (const it of items) {
-        const tipo = it.types.find((t) => /^image\/(png|jpeg|webp)$/.test(t));
-        if (tipo) files.push(new File([await it.getType(tipo)], "pegada." + tipo.split("/")[1], { type: tipo }));
+        const tipo = it.types.find((t) => /^image\//.test(t));
+        if (tipo) files.push(new File([await it.getType(tipo)], "pegada", { type: tipo }));
       }
-      if (!files.length) { fm.textContent = "No hay ninguna imagen copiada. Copia una foto y vuelve a intentar."; fm.style.color = "var(--err)"; return; }
-      fm.textContent = ""; recibirPegados(files);
+      if (!files.length) { msgF("No hay ninguna imagen copiada. Copia la foto (clic derecho → «Copiar imagen») y vuelve a intentar.", true); return; }
+      await recibirPegados(files);
     } catch (_) {
-      fm.textContent = "Este navegador no deja leer lo copiado con el botón. Usa Ctrl+V en la página."; fm.style.color = "var(--err)";
+      // El navegador no deja leer el portapapeles con un botón: se usa la caja
+      zonaPegar.focus();
+      msgF("Ahora presiona Ctrl+V (en el celular: mantén presionada la caja y elige «Pegar»).");
     }
   });
 
