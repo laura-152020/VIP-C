@@ -466,7 +466,10 @@
   function msgPdf(t, error) { const m = $("#p-msg"); m.textContent = t || ""; m.style.color = error ? "var(--err)" : ""; }
   function pintarPdf() {
     const r = regPdf();
-    formPdf.innerHTML = (r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : "") + campos(r, "p-");
+    // Mientras se leen las fotos del PDF, un tramo sin coordenadas no es un error todavía: se avisa que espere
+    const esperando = pdfActual && pdfActual.leyendoFotos && !tieneCoord(r) && r.mensaje && /coordenadas/.test(r.mensaje);
+    formPdf.innerHTML = (esperando ? '<div class="info"><span class="girando" aria-hidden="true"></span>Leyendo las imágenes del PDF para encontrar las coordenadas. Por favor espera unos segundos…</div>'
+      : r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : "") + campos(r, "p-");
     const t = $("#p-tramos");
     t.hidden = tramosPdf.length < 2;
     t.innerHTML = tramosPdf.map((x, i) => `<button type="button" class="tramo${i === selPdf ? " is-sel" : ""}${x.agregado ? " is-ok" : ""}" data-i="${i}"${x.agregado ? " disabled" : ""}>${x.agregado ? "✓ " : ""}${esc(x.punto)}</button>`).join("");
@@ -658,6 +661,11 @@
     return cv.toDataURL("image/jpeg", 0.85).split(",")[1];
   }
   async function leerFotosPdf(pdf, d) {
+    pdf.leyendoFotos = true; pintarPdf();
+    try { await leerFotosPdfInterno(pdf, d); }
+    finally { pdf.leyendoFotos = false; if (pdfActual === pdf) { $("#p-fotos").hidden = true; pintarPdf(); } }
+  }
+  async function leerFotosPdfInterno(pdf, d) {
     let fotos = [];
     try { fotos = await LectorPDF.imagenes(pdf.doc, 16, 300); } catch (_) { return; }
     if (!fotos.length || pdfActual !== pdf) return;
@@ -678,7 +686,7 @@
           aviso3(listos < grupos.length ? `· Gemini está leyendo las fotos del PDF (${Math.min(listos * 3, fotos.length)} de ${fotos.length})…` : "");
           if (g.status !== "success" || !Array.isArray(g.fotos)) return;
           alguno = true;
-          const nuevos = g.fotos.filter((x) => x.legible && fotos[ini + x.indice]).map((x) => {
+          const nuevos = g.fotos.filter((x) => x.legible && x.esFoto !== false && fotos[ini + x.indice]).map((x) => {
             const f = fotos[ini + x.indice], pr = LectorPDF.prDe("pr" + String(x.pr || "").replace(/^\s*(pr|k|km)\.?\s*/i, ""));
             return { lat: x.latitud, lon: x.longitud, fecha: x.fecha || "", pr, foto: f.dataUrl, pagina: f.pagina, seguro: true,
               nombre: pr ? "PR " + pr : "Foto pág. " + f.pagina, tipo: d.tipoGeneral, descripcion: "" };
@@ -710,7 +718,8 @@
         aviso3(`· Leyendo las fotos del PDF (${i + 1} de ${fotos.length})…`);
         let o = null;
         try { o = await LectorSello.leer(fotos[i].dataUrl, { rapido: true }); } catch (_) {}
-        if (!(o && o.latitud != null && o.longitud != null && !o.coordDudosa)) continue;
+        // Solo fotos de campo con sello (fecha + coordenadas); los mapas y capturas suelen traer coordenadas sin fecha
+        if (!(o && o.latitud != null && o.longitud != null && !o.coordDudosa && o.fecha)) continue;
         const p = { lat: o.latitud, lon: o.longitud, fecha: o.fecha || "", pr: LectorPDF.prDe(o.textoLeido), foto: fotos[i].dataUrl, pagina: fotos[i].pagina, seguro: false,
           tipo: d.tipoGeneral, descripcion: "" };
         p.nombre = p.pr ? "PR " + p.pr : "Foto pág. " + p.pagina;

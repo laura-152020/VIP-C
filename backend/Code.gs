@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.1.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.2.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -910,7 +910,8 @@ function leerPdf_(payload) {
     "responsable (quién hizo la visita, exactamente uno de: " + RESPONSABLES.join(" | ") + "; Rental = Renting de Antioquia/RENTAN y sus contratistas o interventorías; vacío si no es claro), " +
     "puntos (lista: un elemento por cada SITIO o AFECTACIÓN distinta que describa el documento, sin importar el formato del documento: " +
     "puede identificarse por coordenadas, por abscisa PR/K (ej PR 18+200, K25+300), por número de tramo o por el nombre del lugar; " +
-    "incluye también los sitios cuyas coordenadas solo aparecen en los sellos superpuestos de las FOTOGRAFÍAS (léelas con cuidado: grados, minutos y segundos; N/S y W/O). " +
+    "incluye también los sitios cuyas coordenadas solo aparecen en los sellos superpuestos de las FOTOGRAFÍAS de campo (léelas con cuidado: grados, minutos y segundos; N/S y W/O); " +
+    "NO tomes coordenadas de mapas, imágenes satelitales ni capturas de pantalla. " +
     "No inventes sitios ni coordenadas. Claves: nombre (ej \"Tramo 1\" o \"PR 18+200\"), latitud (tal cual o vacío), longitud (tal cual o vacío), " +
     "pr (abscisa PR o K si aparece, ej 18+200, o vacío), fecha_iso (fecha de ese sitio si es distinta a la de la visita, o vacío), " +
     "tipo_afectacion (exactamente uno de: " + TIPOS_AFECTACION.join(" | ") + "), " +
@@ -968,10 +969,12 @@ function leerFotos_(payload) {
   const prompt =
     "Te envío " + imgs.length + " imágenes en orden (0 a " + (imgs.length - 1) + "), sacadas de un acta de visita vial de Antioquia (Colombia). " +
     "Muchas son fotos con un sello de texto superpuesto (fecha, hora, coordenadas y lugar), por ejemplo «13/05/26, 8:40 a.m. N 6° 22' 10\" W 75° 42' 28\" Palmitas»; " +
-    "otras son capturas de mapa con coordenadas escritas. Lee EXACTAMENTE lo escrito, sin inventar ni deducir del paisaje. " +
+    "otras son mapas, imágenes satelitales, capturas de pantalla, tablas o logos. SOLO cuentan las coordenadas del SELLO de una FOTOGRAFÍA de campo: " +
+    "en mapas, capturas, tablas o cualquier imagen sin ese sello devuelve es_foto_con_sello=false y legible=false aunque se vean coordenadas. " +
+    "Lee EXACTAMENTE lo escrito, sin inventar ni deducir del paisaje. " +
     "Las fechas numéricas van en formato día/mes/año. Responde SOLO JSON: {\"fotos\":[{\"indice\":0, \"fecha_iso\":\"AAAA-MM-DD o vacío\", " +
     "\"latitud\":\"tal cual, ej N 6°22'10\\\" o vacío\", \"longitud\":\"tal cual, ej W 75°42'28\\\" o vacío\", " +
-    "\"pr\":\"abscisa PR escrita en el sello, ej 18+200, o vacío\", \"legible\":true}]} con un elemento por imagen.";
+    "\"pr\":\"abscisa PR escrita en el sello, ej 18+200, o vacío\", \"es_foto_con_sello\":true, \"legible\":true}]} con un elemento por imagen.";
   const parts = [{ text: prompt }];
   imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
   const res = geminiRapido_(key, modelo, { contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } });
@@ -984,8 +987,8 @@ function leerFotos_(payload) {
   const fotos = (Array.isArray(d.fotos) ? d.fotos : []).map(function (f) {
     const lat = dmsADecimal_(f.latitud); let lon = dmsADecimal_(f.longitud);
     if (lon !== null && lon > 60) lon = -lon;
-    return { indice: Number(f.indice), pr: String(f.pr || ""), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
-      legible: !!f.legible && lat !== null && lon !== null && !fueraDeAntioquia_(lat, lon) };
+    return { indice: Number(f.indice), esFoto: f.es_foto_con_sello !== false, pr: String(f.pr || ""), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
+      legible: !!f.legible && f.es_foto_con_sello !== false && lat !== null && lon !== null && !fueraDeAntioquia_(lat, lon) };
   });
   return { status: "success", fotos: fotos };
 }

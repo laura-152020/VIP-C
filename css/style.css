@@ -183,3 +183,7 @@ img{-webkit-user-drag:none}
 .zona-pegar{flex:1 1 260px;min-height:44px;border:1px dashed var(--line);border-radius:8px;padding:11px 12px;color:var(--muted);font-size:14px;cursor:text;outline:none;caret-color:transparent;overflow:hidden;white-space:nowrap}
 .zona-pegar:empty::before{content:"Pega aquí una imagen copiada: haz clic y presiona Ctrl+V (en el celular, mantén presionado y elige «Pegar»)";white-space:normal;display:block}
 .zona-pegar:focus{border-color:var(--brand);border-style:solid;background:var(--sign-soft)}
+.info{font-size:13px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:8px}
+.girando{width:14px;height:14px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--brand);animation:girar .8s linear infinite;flex:none}
+@keyframes girar{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.girando{animation:none}}
