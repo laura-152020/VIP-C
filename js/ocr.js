@@ -180,6 +180,7 @@ const LectorSello = (function () {
       for (const rr of (r.length >= 4 ? [r, r.slice(1)] : [r])) {
         if (rr.length === 4) add(g, rr.slice(0, 2), rr.slice(2) + dec);
         if (rr.length === 3) add(g, rr.slice(0, 1), rr.slice(1) + dec);
+        if (rr.length === 2) add(g, rr.slice(0, 1), rr.slice(1) + dec, true); // ej. 7546 → 75°4'6" (dudoso: también podría ser 75°46')
       }
     }
     return out;

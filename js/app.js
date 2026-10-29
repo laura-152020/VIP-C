@@ -746,15 +746,18 @@
         let o = null;
         try { o = await LectorSello.leer(fotos[i].dataUrl, { rapido: true }); } catch (_) {}
         // Solo sellos de foto de campo: fecha + coordenadas, sin dudas de lectura
-        if (!(o && o.latitud != null && o.longitud != null && !o.coordDudosa && o.fecha) || aplicado[i]) continue;
-        const x = { i, lat: o.latitud, lon: o.longitud, fecha: o.fecha, pr: LectorPDF.prDe(o.textoLeido) };
-        // En fotos pequeñas el lector puede confundir un número: se acepta si la foto es grande o si otra foto coincide (< 60 m)
-        const grande = Math.max(fotos[i].ancho, fotos[i].alto) >= 1000;
-        const coincide = lecturas.find((y) => y.i !== i && distanciaM(y, x) < 60) || Object.values(aplicado).find((y) => distanciaM(y, x) < 60);
+        if (!(o && o.latitud != null && o.longitud != null && o.fecha) || aplicado[i]) continue;
+        const x = { i, lat: o.latitud, lon: o.longitud, fecha: o.fecha, pr: LectorPDF.prDe(o.textoLeido), dudosa: !!o.coordDudosa };
+        // En fotos pequeñas el lector puede confundir un número: se acepta si la foto es grande o si otra foto coincide.
+        // Una lectura dudosa (separadores perdidos, ej. «6853 N 7546 W») solo cuenta si otra foto del MISMO PR coincide (< 100 m).
+        const grande = Math.max(fotos[i].ancho, fotos[i].alto) >= 1000 && !x.dudosa;
+        const vale = (y) => y.i !== i && (x.dudosa || y.dudosa ? (x.pr && y.pr === x.pr && distanciaM(y, x) < 100) : distanciaM(y, x) < 60);
+        const coincide = lecturas.find(vale) || (!x.dudosa && Object.values(aplicado).find((y) => distanciaM(y, x) < 60));
         lecturas.push(x);
         if (grande || coincide) {
-          await aplicar(i, x, "lector");
+          // Primero la foto anterior (la primera foto de la sección es la que manda)
           if (coincide && coincide.i != null && !aplicado[coincide.i]) await aplicar(coincide.i, coincide, "lector");
+          await aplicar(i, x, "lector");
         }
       }
     })();
