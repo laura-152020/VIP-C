@@ -316,7 +316,7 @@ const LectorPDF = (function () {
             else continue; // formato de 1 bit (dibujos): no son fotos
             cx.putImageData(new ImageData(rgba, img.width, img.height), 0, 0);
           } else continue;
-          const dataUrl = cv.toDataURL("image/jpeg", 0.9);
+          const dataUrl = cv.toDataURL("image/png"); // sin recomprimir: el sello se lee mejor
           if (out.some((x) => x.dataUrl === dataUrl)) continue; // la misma imagen repetida en varias páginas
           out.push({ pagina: n, ancho: img.width, alto: img.height, dataUrl });
         } catch (_) { /* imagen que no se pudo extraer */ }
