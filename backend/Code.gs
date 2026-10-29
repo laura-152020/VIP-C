@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.2.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.3.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -822,7 +822,8 @@ function leerSello_(payload) {
     "Responde SOLO JSON con estas claves:\n" +
     "fecha_texto (tal cual), fecha_iso (AAAA-MM-DD; las fechas numéricas van en formato día/mes/año), " +
     "latitud (tal cual, ej 6°10'42\"N), longitud (tal cual, ej 75°9'57\"W), " +
-    "tramo (nombre del tramo sin la palabra Vía, ej \"Granada - Guatapé\"), " +
+    "tramo (nombre del tramo COMPLETO y exacto, sin la palabra Vía; en el sello estándar es la línea que va debajo de las coordenadas, " +
+    "ej \"Porcesito - La Cortada - Yolombó - Vegachí\" o \"Remedios\"), " +
     "codigo_via (código oficial de la vía si aparece, ej 60AN17; si no, \"\"), " +
     "municipio (municipio de Antioquia escrito en el sello, si aparece; si no, \"\"), " +
     "tipo_afectacion (lo que se VE en la foto, exactamente uno de: " + TIPOS_AFECTACION.join(" | ") + "), " +

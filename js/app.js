@@ -352,7 +352,7 @@
     const completo = (x) => !!(x && x.fecha && x.latitud != null && !x.coordDudosa);
     const pGem = !HAY_BACKEND ? Promise.resolve(null) : Promise.race([
       Api.post("leer", { base64: r.base64Lectura || r.base64, mimeType: "image/jpeg" }).then((s) => s.status === "success"
-        ? { fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS, tramo: s.tramo, codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion }
+        ? { fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS, tramo: LectorSello.corregirTramo(s.tramo || ""), codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion }
         : null).catch(() => null),
       new Promise((ok) => setTimeout(() => ok(null), 30000)) // máximo 30 s esperando a Gemini
     ]);
@@ -536,13 +536,11 @@
     if (pdfActual !== pdf || g.status !== "success") return;
     const habiaPuntos = d.puntos.length;
     d.fecha = d.fecha || g.fecha || ""; d.codigoVia = d.codigoVia || g.codigoVia || ""; d.via = d.via || g.via || ""; d.municipioTexto = g.municipio || "";
-    if (g.responsable) d.responsableGemini = g.responsable;
     const resumenAnterior = d.resumen;
     if (g.resumen) d.resumen = g.resumen;
     tramosPdf.forEach((r) => {
       if (!r.agregado && (!r.observaciones || r.observaciones === resumenAnterior)) r.observaciones = d.resumen;
       if (!r.fecha) r.fecha = d.fecha; if (!r.codigoVia) r.codigoVia = d.codigoVia; if (!r.nombreTramo) r.nombreTramo = d.via;
-      if (!r.responsable && g.responsable) r.responsable = g.responsable;
     });
     // Gemini entiende cualquier formato de PDF: sus sitios que no estén ya en la lista se agregan.
     // Un sitio sin coordenadas ni PR solo se agrega si el lector del navegador no encontró ningún sitio.
@@ -561,7 +559,7 @@
   const imagenesPagina = new WeakMap(); // por PDF: página → imagen dibujada
   async function crearTramo(pdf, d, p) {
     const enTexto = municipiosDelTexto(d.texto);
-    const responsable = d.responsableGemini || (d.esGobernacion ? "Gobernación" : (manual.responsable || ""));
+    // Sección 3: el tipo de afectación y el responsable los elige la persona (no se llenan solos)
     if (!imagenesPagina.has(pdf)) imagenesPagina.set(pdf, {});
     const cache = imagenesPagina.get(pdf);
     const pag = Math.min(Math.max(1, p.pagina || 1), pdf.doc.numPages);
@@ -573,7 +571,7 @@
       origen: "pdf", estado: "listo", nombreArchivo: pdf.nombre, punto: p.nombre, pagina: pag, pdf,
       dataUrl: p.foto || cache[pag].grande, miniatura: p.foto || cache[pag].mini,
       fecha: p.fecha || d.fecha || "", fechaTexto: d.fechaTexto || "", codigoVia: d.codigoVia || "", nombreTramo: d.via || "",
-      tipoAfectacion: TIPOS_AFECTACION.includes(p.tipo) ? p.tipo : "", responsable,
+      tipoAfectacion: "", responsable: "",
       observaciones: (p.pr || p.deGemini) && p.descripcion ? p.descripcion : (d.resumen || p.descripcion || ""), // sitio con su propio texto
       pr: p.pr || ""
     });
@@ -587,7 +585,7 @@
       const m = enTexto[0] || MUN_POR_NOMBRE[norm(d.municipioTexto)];
       if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
     }
-    const falta = [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas", !r.tipoAfectacion && "el tipo de afectación"].filter(Boolean);
+    const falta = [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas"].filter(Boolean);
     const otroMun = tieneCoord(r) && enTexto.length && !enTexto.some((m) => m.n === r.municipio)
       ? `El acta menciona ${enTexto.map((m) => m.n).join(" / ")} y las coordenadas caen en ${r.municipio || "otro municipio"}. Revisa el municipio.` : "";
     r.mensaje = falta.length ? "No se encontró en el PDF " + falta.join(", ") + ". Complétalo a mano." : otroMun;
@@ -612,7 +610,6 @@
       // Foto con PR en el sello (ej. «pr18+200»): va a la sección de ese PR
       const mismoPr = p.pr && tramosPdf.find((r) => r.pr && r.pr === p.pr && !r.agregado);
       if (mismoPr && p.lat == null) { // mismo PR sin coordenadas: solo completa lo que falte
-        if (!mismoPr.tipoAfectacion && TIPOS_AFECTACION.includes(p.tipo)) { mismoPr.tipoAfectacion = p.tipo; completados++; }
         continue;
       }
       if (mismoPr && p.lat != null) {
@@ -623,7 +620,7 @@
           completarDesdeCoordenadas(mismoPr);
           if (!mismoPr.fecha && p.fecha) mismoPr.fecha = p.fecha;
           if (p.foto) { mismoPr.dataUrl = p.foto; mismoPr.miniatura = p.foto; mismoPr.fotoPropia = true; }
-          mismoPr.mensaje = !mismoPr.fecha ? "No se encontró en el PDF la fecha. Complétala a mano." : (!mismoPr.tipoAfectacion ? "Falta el tipo de afectación." : "");
+          mismoPr.mensaje = !mismoPr.fecha ? "No se encontró en el PDF la fecha. Complétala a mano." : "";
           enriquecer(mismoPr, () => { if (regPdf() === mismoPr) pintarPdf(); });
           completados++;
         }

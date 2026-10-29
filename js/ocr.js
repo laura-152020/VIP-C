@@ -155,6 +155,8 @@ const LectorSello = (function () {
     const out = [];
     const add = (g, m, s, incompleto) => {
       if (g === "" || m === "" || s === "" || g == null || m == null || s == null) return;
+      // Segundos con el punto decimal perdido: 19544 → 19.544
+      if (/^\d{3,}$/.test(String(s)) && Number(s) >= 60) s = String(s).slice(0, 2) + "." + String(s).slice(2);
       const v = dms(g, m, s); if (v != null) out.push({ v, g: Number(g), m: Number(m), s: String(Number(s)), incompleto: !!incompleto });
     };
     const sep = (x) => { const [a, b] = String(x).split("."); return [a, b ? "." + b : ""]; };
@@ -218,7 +220,7 @@ const LectorSello = (function () {
     // 1) Grados-minutos-segundos con hemisferio
     let lat = null, lon = null;
     for (const l of lineas) {
-      const re = /([0-9][0-9°'". ,]{1,24}?)\s*([NSWO])(?![A-ZÁÉÍÓÚÑ])/g;
+      const re = /([0-9][0-9°'". ,:;]{1,24}?)\s*([NSWO])(?![A-ZÁÉÍÓÚÑ])/g;
       let m;
       while ((m = re.exec(l))) {
         const tipo = (m[2] === "N" || m[2] === "S") ? "lat" : "lon";
@@ -227,8 +229,8 @@ const LectorSello = (function () {
         if (r) { if (tipo === "lat") lat = r; else lon = r; }
       }
       // Hemisferio perdido: busca el bloque que falta en la misma línea
-      if (lat && !lon) { const b = l.match(/(7[3-7][0-9°'". ]{3,20})/); if (b) lon = leerBloque(b[1], "lon"); }
-      if (lon && !lat) { const b = l.match(/(?:^|[^0-9])([5-8][0-9°'". ]{3,14})/); if (b) lat = leerBloque(b[1], "lat"); }
+      if (lat && !lon) { const b = l.match(/(7[3-7][0-9°'". :;]{3,20})/); if (b) lon = leerBloque(b[1], "lon"); }
+      if (lon && !lat) { const b = l.match(/(?:^|[^0-9])([5-8][0-9°'". :;]{3,14})/); if (b) lat = leerBloque(b[1], "lat"); }
       if (lat && lon) return { lat: r6(lat.v), lon: r6(-lon.v), latTxt: lat.txt, lonTxt: lon.txt, dudoso: !!(lat.dudoso || lon.dudoso) };
     }
 
@@ -312,7 +314,7 @@ const LectorSello = (function () {
       .replace(/[.,;:]+\s*(?=[-–—])/g, " ")
       .replace(/\s*[-–—]+\s*/g, " - ")
       .replace(/(\s+[^\s]{1})+\s*$/, "")      // basura de 1 carácter al final (OCR)
-      .replace(/^(?:[A-Z]{1,3}\s+)+(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/, "") // basura en mayúsculas al comienzo (ej. «OST Porcesito»)
+      .replace(/^(?:[A-Z]{1,4}\s+)+(?:-\s+)?(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/, "") // basura en mayúsculas al comienzo (ej. «OST Porcesito», «ENS TEN BT - Remedios»)
       .replace(/\s{2,}/g, " ").replace(/[\s.,;:-]+$/, "").trim();
     return corregirSegmentos(t);
   }
@@ -328,7 +330,7 @@ const LectorSello = (function () {
   }
   // Corrige cada segmento del tramo con el nombre de municipio más parecido (ej. «Yolomboló» → «Yolombó», «Vegachi» → «Vegachí»)
   function corregirSegmentos(t) {
-    if (typeof MUNICIPIOS === "undefined" || !/ - /.test(t)) return t;
+    if (typeof MUNICIPIOS === "undefined" || !t) return t;
     return t.split(" - ").map((seg) => {
       if (seg.length < 4) return seg;
       let mejor = null, p = 0;
@@ -337,8 +339,39 @@ const LectorSello = (function () {
     }).join(" - ");
   }
 
+  // En el formato de sello estándar, el tramo es la línea que va debajo de las coordenadas (puede ser una sola palabra, ej. «Remedios»)
+  function tramoBajoCoordenadas(texto) {
+    const lineas = normalizar(texto).split("\n").map((l) => l.trim()).filter(Boolean);
+    let k = -1;
+    lineas.forEach((l, i) => { if (/\d{1,3}\s*[°º*%"']?\s*\d{1,2}.{0,40}[NS].{0,30}\d{2,3}\s*[°º*%"']?\s*\d{1,2}.{0,40}[WO]/i.test(l)) k = i; });
+    if (k < 0 || k + 1 >= lineas.length) return "";
+    let t = lineas[k + 1];
+    if (/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(t)) return "";        // es la fecha, no el tramo
+    t = t.replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]+/, "").replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñ.)]+$/, "");
+    const toks = t.split(/\s+/);
+    while (toks.length && !/^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]/.test(toks[0])) toks.shift();       // ruido antes de la primera palabra con mayúscula
+    t = limpiarTramo(toks.join(" "));
+    if (/ - /.test(t)) {
+      // Tramo con segmentos: desde el primer segmento con mayúscula hasta el final
+      const m = t.match(/[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ .]{2,}(?:\s*-\s*[A-ZÁÉÍÓÚÑ][A-Za-zÁÉÍÓÚÑáéíóúñ .]{2,})+$/);
+      if (m) t = m[0].trim();
+    } else if (typeof MUNICIPIOS !== "undefined") {
+      // Una sola parte (ej. «Remedios»): el ruido del fondo queda a la izquierda; si termina en un municipio, se deja solo el municipio
+      const w = t.split(/\s+/);
+      for (let n = Math.min(4, w.length); n >= 1; n--) {
+        const cola = w.slice(-n).join(" ");
+        const m = MUNICIPIOS.find((x) => parecido(cola, x.n) >= 0.8);
+        if (m) { t = m.n; break; }
+      }
+    }
+    const palabras = t.split(/[\s-]+/).filter((w) => /^[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}$/.test(w) && /[aeiouáéíóú]/i.test(w));
+    return palabras.length && (t.match(/[A-Za-zÁÉÍÓÚÑáéíóúñ]/g) || []).length / t.replace(/[\s-]/g, "").length > 0.85 ? t : "";
+  }
+
   function interpretar(texto) {
     const f = buscarFecha(texto), c = buscarCoordenadas(texto), v = buscarTramo(texto);
+    const bajo = c ? tramoBajoCoordenadas(texto) : "";
+    if (bajo && !/^v[ií]a\b/i.test(v.tramo || "")) v.tramo = bajo; // en el formato estándar, la línea bajo las coordenadas manda
     return {
       fecha: f ? f.iso : "", fechaTexto: f ? f.texto : "",
       latitud: c ? c.lat : null, longitud: c ? c.lon : null,
@@ -357,10 +390,13 @@ const LectorSello = (function () {
     const w = await iniciar();
     // [desde, hasta, modo, umbral de blanco]. El primero sirve casi siempre; los demás cubren fondos claros, sellos más altos o arriba.
     // [desdeY, hastaY, modo, umbral, desdeX]. Los sellos de cámara suelen ir abajo a la derecha: primero esa zona (menos ruido), luego todo el ancho.
-    const intentos = [[0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
+    // Formato de sello usado por todos (abajo a la derecha, texto blanco con sombra):
+    //   «26/10/26, 10:36 a.m.» · «6° 38' 21.075" N, 74° 53' 24.732" W» · «Porcesito - La Cortada - Yolombó - Vegachí»
+    // Primero se lee solo esa franja (más rápido y con menos ruido); si no basta, las pasadas generales.
+    const intentos = [[0.78, 1, "blanco", 225, 0.25], [0.78, 1, "sombra", 200, 0.25], [0.78, 1, "adapt", 0, 0.25], [0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
     let mejor = null, textos = [], textosN = 0;
     let tramoAncho = false; // el nombre del tramo leído en una pasada de ancho completo (no recortado a la izquierda)
-    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[2], intentos[5], intentos[7]] : [intentos[0], intentos[2], intentos[1], ...intentos.slice(3)])) {
+    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[1], intentos[3], intentos[5]] : intentos)) {
       const { data } = await w.recognize(franja(img, a, b, modo, umbral, x));
       textos.push(data.text);
       const r = interpretar(data.text);
@@ -370,12 +406,12 @@ const LectorSello = (function () {
         if (r.latitud != null && (mejor.latitud == null || (mejor.coordDudosa && !r.coordDudosa)))
           Object.assign(mejor, { latitud: r.latitud, longitud: r.longitud, latitudDMS: r.latitudDMS, longitudDMS: r.longitudDMS, coordDudosa: r.coordDudosa });
         if (!mejor.fecha && r.fecha) Object.assign(mejor, { fecha: r.fecha, fechaTexto: r.fechaTexto });
-        if (r.tramo && (calidadTramo(r.tramo) > calidadTramo(mejor.tramo) || (!x && r.tramo.length > (mejor.tramo || "").length && calidadTramo(r.tramo) >= calidadTramo(mejor.tramo)))) mejor.tramo = r.tramo;
+        if (r.tramo && (calidadTramo(r.tramo) > calidadTramo(mejor.tramo) || ((!x || x <= 0.25) && r.tramo.length > (mejor.tramo || "").length && calidadTramo(r.tramo) >= calidadTramo(mejor.tramo)))) mejor.tramo = r.tramo;
         if (!mejor.codigoVia && r.codigoVia) mejor.codigoVia = r.codigoVia;
         if (!mejor.municipioTexto && r.municipioTexto) mejor.municipioTexto = r.municipioTexto;
       }
       textosN = textos.length;
-      if (!x && r.tramo) tramoAncho = true;
+      if ((!x || x <= 0.25) && r.tramo) tramoAncho = true;
       if (puntaje(mejor) >= 7 && (tramoAncho || rapido)) break;
       if (rapido && mejor.latitud != null && !mejor.coordDudosa) break;
       if (textosN >= 3 && mejor.fecha && mejor.tramo && mejor.latitud == null) break; // sello sin coordenadas: no insistir
@@ -386,5 +422,5 @@ const LectorSello = (function () {
     return mejor;
   }
 
-  return { leer, interpretar, iniciar, parecido, _franja: franja };
+  return { leer, interpretar, iniciar, parecido, corregirTramo: corregirSegmentos, _franja: franja };
 })();
