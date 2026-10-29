@@ -259,6 +259,37 @@ const LectorPDF = (function () {
     return partes.join("\n").slice(0, 2000);
   }
 
-  return { cargarLib, abrir, dibujarPagina, interpretar, tipoDe, resumir };
+
+  // Fotos incrustadas en el PDF (para leer el sello de cada una). Devuelve las más grandes primero.
+  async function imagenes(doc, max, minLado) {
+    const lib = await cargarLib(), OPS = lib.OPS, out = [];
+    for (let n = 1; n <= doc.numPages && out.length < (max || 20); n++) {
+      const pag = await doc.getPage(n);
+      const ops = await pag.getOperatorList();
+      const ids = [];
+      ops.fnArray.forEach((f, i) => { if (f === OPS.paintImageXObject || f === OPS.paintJpegXObject) ids.push(ops.argsArray[i][0]); });
+      for (const id of [...new Set(ids)]) {
+        try {
+          const img = await new Promise((ok) => { try { (id.startsWith("g_") ? pag.commonObjs : pag.objs).get(id, ok); } catch (_) { ok(null); } });
+          if (!img || Math.min(img.width, img.height) < (minLado || 300)) continue;
+          const cv = document.createElement("canvas"); cv.width = img.width; cv.height = img.height;
+          const cx = cv.getContext("2d");
+          if (img.bitmap) cx.drawImage(img.bitmap, 0, 0);
+          else if (img.data) {
+            const rgba = new Uint8ClampedArray(img.width * img.height * 4), d = img.data, px = img.width * img.height;
+            if (d.length === px * 4) rgba.set(d);
+            else if (d.length === px * 3) for (let i = 0, j = 0; i < px; i++) { rgba[j++] = d[i * 3]; rgba[j++] = d[i * 3 + 1]; rgba[j++] = d[i * 3 + 2]; rgba[j++] = 255; }
+            else if (d.length === px) for (let i = 0, j = 0; i < px; i++) { rgba[j++] = rgba[j++] = rgba[j++] = d[i]; rgba[j++] = 255; }
+            else continue; // formato de 1 bit (dibujos): no son fotos
+            cx.putImageData(new ImageData(rgba, img.width, img.height), 0, 0);
+          } else continue;
+          out.push({ pagina: n, ancho: img.width, alto: img.height, dataUrl: cv.toDataURL("image/jpeg", 0.9) });
+        } catch (_) { /* imagen que no se pudo extraer */ }
+      }
+    }
+    return out;
+  }
+
+  return { cargarLib, abrir, dibujarPagina, imagenes, interpretar, tipoDe, resumir };
 })();
 if (typeof module !== "undefined") module.exports = LectorPDF;

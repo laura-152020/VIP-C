@@ -292,7 +292,12 @@
       const c2 = document.createElement("canvas");
       c2.width = Math.round(img.width * t); c2.height = Math.round(img.height * t);
       c2.getContext("2d").drawImage(img, 0, 0, c2.width, c2.height);
-      return { dataUrl, base64: dataUrl.split(",")[1], miniatura: c2.toDataURL("image/jpeg", 0.75) };
+      // Copia más liviana solo para que Gemini lea el sello (se sube más rápido)
+      const l = Math.min(1, 1600 / Math.max(img.width, img.height));
+      const c3 = document.createElement("canvas");
+      c3.width = Math.round(img.width * l); c3.height = Math.round(img.height * l);
+      c3.getContext("2d").drawImage(img, 0, 0, c3.width, c3.height);
+      return { dataUrl, base64: dataUrl.split(",")[1], base64Lectura: c3.toDataURL("image/jpeg", 0.82).split(",")[1], miniatura: c2.toDataURL("image/jpeg", 0.75) };
     } finally { URL.revokeObjectURL(url); }
   }
 
@@ -317,7 +322,7 @@
       if (f.size > maxMB * 1048576) { aviso(f.name + " supera " + maxMB + " MB.", true); continue; }
       let opt;
       try { opt = await optimizar(f); } catch (_) { aviso("No se pudo abrir " + f.name + ".", true); continue; }
-      const r = nuevoRegistro({ origen: "foto", estado: "leyendo", nombreArchivo: f.name, dataUrl: opt.dataUrl, base64: opt.base64, miniatura: opt.miniatura,
+      const r = nuevoRegistro({ origen: "foto", estado: "leyendo", nombreArchivo: f.name, dataUrl: opt.dataUrl, base64: opt.base64, base64Lectura: opt.base64Lectura, miniatura: opt.miniatura,
         responsable: manual.responsable || "" });
       r.exif = await leerExif(f);
       items.unshift(r);
@@ -339,19 +344,37 @@
   let avisoPrimeraVez = true;
   async function leer(r) {
     r.estado = "leyendo"; actualizar(r);
-    let d = null, error = "";
-    if (HAY_BACKEND) {
-      const s = await Api.post("leer", { base64: r.base64, mimeType: "image/jpeg" });
-      if (s.status === "success") d = { fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS, tramo: s.tramo, codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion };
+    // Gemini (servidor) y el lector del navegador trabajan al mismo tiempo: se usa el primero que lea
+    // el sello completo (fecha y coordenadas) y el otro solo completa lo que falte.
+    let error = "";
+    const completo = (x) => !!(x && x.fecha && x.latitud != null && !x.coordDudosa);
+    const pGem = !HAY_BACKEND ? Promise.resolve(null) : Promise.race([
+      Api.post("leer", { base64: r.base64Lectura || r.base64, mimeType: "image/jpeg" }).then((s) => s.status === "success"
+        ? { fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS, tramo: s.tramo, codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion }
+        : null).catch(() => null),
+      new Promise((ok) => setTimeout(() => ok(null), 30000)) // máximo 30 s esperando a Gemini
+    ]);
+    if (avisoPrimeraVez) { aviso("Preparando el lector de fotos. La primera vez tarda unos segundos."); avisoPrimeraVez = false; }
+    const pOcr = LectorSello.leer(r.dataUrl).catch((e) => { error = e.message || "No se pudo leer la foto."; return null; }).finally(() => aviso(""));
+    const sinVacios = (x) => Object.fromEntries(Object.entries(x || {}).filter(([, v]) => v != null && v !== ""));
+    const primero = await Promise.race([pGem.then((x) => ["gem", x]), pOcr.then((x) => ["ocr", x])]);
+    let d, tarde = null;
+    if (completo(primero[1])) {
+      d = primero[1];
+      tarde = primero[0] === "gem" ? pOcr : pGem; // el otro llega después y completa lo que falte
+    } else {
+      const otro = await (primero[0] === "gem" ? pOcr : pGem);
+      const gem = primero[0] === "gem" ? primero[1] : otro, ocr = primero[0] === "gem" ? otro : primero[1];
+      d = (gem || ocr) ? Object.assign({}, ocr || {}, sinVacios(gem)) : null; // como antes: Gemini manda sobre el lector
     }
-    if (!d || d.latitud == null || !d.fecha) {
-      try {
-        if (avisoPrimeraVez) { aviso("Preparando el lector de fotos. La primera vez tarda unos segundos."); avisoPrimeraVez = false; }
-        const o = await LectorSello.leer(r.dataUrl);
-        d = d ? Object.assign({}, o, Object.fromEntries(Object.entries(d).filter(([, v]) => v != null && v !== ""))) : o;
-        aviso("");
-      } catch (e) { error = e.message || "No se pudo leer la foto."; }
-    }
+    if (tarde) tarde.then((x) => {
+      if (!x || r.estado === "guardado" || r.estado === "guardando") return;
+      let cambio = false;
+      if (x.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(x.tipoAfectacion)) { r.tipoAfectacion = x.tipoAfectacion; cambio = true; }
+      if (x.codigoVia && !r.codigoVia) { r.codigoVia = x.codigoVia; cambio = true; }
+      if (x.tramo && !r.nombreTramo) { r.nombreTramo = x.tramo; cambio = true; }
+      if (cambio) repintarSinPerderFoco(r, () => actualizar(r));
+    });
     d = d || {};
     if (d.fecha) { r.fecha = d.fecha; r.fechaTexto = d.fechaTexto || ""; }
     if (d.latitud != null && d.longitud != null) {
@@ -479,6 +502,7 @@
     pdfActual = { nombre: f.name, base64: aBase64(bytes), fileId: null, doc: lectura.doc, d };
     const pdf = pdfActual;
     await armarTramos(pdf, d);
+    leerFotosPdf(pdf, d); // en segundo plano: coordenadas de los sellos de las fotos del PDF
     msgPdf(sinTexto ? "El PDF no tiene texto (parece escaneado)." : `${d.puntos.length ? d.puntos.length + " tramo(s) encontrados" : "No se encontraron coordenadas"}. Revisa los datos y toca «Agregar a la lista».`, sinTexto);
 
     // Con el servidor: Gemini redacta el resumen de todo el acta y completa lo que falte
@@ -489,61 +513,144 @@
     if (pdfActual !== pdf || g.status !== "success") return;
     const habiaPuntos = d.puntos.length;
     d.fecha = d.fecha || g.fecha || ""; d.codigoVia = d.codigoVia || g.codigoVia || ""; d.via = d.via || g.via || ""; d.municipioTexto = g.municipio || "";
-    if (!habiaPuntos && Array.isArray(g.puntos)) {
-      d.puntos = g.puntos.filter((p) => p.latitud != null && p.longitud != null)
-        .map((p, k) => ({ lat: p.latitud, lon: p.longitud, nombre: p.nombre || "Punto " + (k + 1), tipo: p.tipoAfectacion || "", descripcion: p.descripcion || "", pagina: p.pagina || 1 }));
-    }
     const resumenAnterior = d.resumen;
     if (g.resumen) d.resumen = g.resumen;
-    if (!habiaPuntos && d.puntos.length) { await armarTramos(pdf, d); }
-    else tramosPdf.forEach((r) => {
+    tramosPdf.forEach((r) => {
       if (!r.agregado && (!r.observaciones || r.observaciones === resumenAnterior)) r.observaciones = d.resumen;
       if (!r.fecha) r.fecha = d.fecha; if (!r.codigoVia) r.codigoVia = d.codigoVia; if (!r.nombreTramo) r.nombreTramo = d.via;
     });
+    // Gemini también mira las fotos del PDF: sus puntos que no estén ya en la lista se agregan
+    if (Array.isArray(g.puntos)) await sumarPuntosPdf(pdf, d, g.puntos.filter((p) => p.latitud != null && p.longitud != null)
+      .map((p, k) => ({ lat: p.latitud, lon: p.longitud, nombre: p.nombre || "Punto " + (k + 1), tipo: p.tipoAfectacion || "", descripcion: p.descripcion || "", pagina: p.pagina || 1 })));
     pintarPdf();
     if (g.resumen) msgPdf("Resumen del acta redactado con Gemini. Revisa los datos y toca «Agregar a la lista».");
   }
 
-  async function armarTramos(pdf, d) {
+  const imagenesPagina = new WeakMap(); // por PDF: página → imagen dibujada
+  async function crearTramo(pdf, d, p) {
     const enTexto = municipiosDelTexto(d.texto);
     const responsable = d.esGobernacion ? "Gobernación" : (manual.responsable || "");
-    const puntos = d.puntos.length ? d.puntos : [{ lat: null, lon: null, nombre: "Acta", tipo: d.tipoGeneral, descripcion: "", pagina: 1 }];
-    const imagenes = {};
-    tramosPdf = [];
-    for (const p of puntos) {
-      const pag = Math.min(Math.max(1, p.pagina || 1), pdf.doc.numPages);
-      if (!imagenes[pag]) {
-        try {
-          const grande = await LectorPDF.dibujarPagina(pdf.doc, pag, 1100);
-          imagenes[pag] = { grande, mini: await LectorPDF.dibujarPagina(pdf.doc, pag, 360) };
-        } catch (_) { imagenes[pag] = { grande: "", mini: "" }; }
-      }
-      const r = nuevoRegistro({
-        origen: "pdf", estado: "listo", nombreArchivo: pdf.nombre, punto: p.nombre, pagina: pag, pdf,
-        dataUrl: imagenes[pag].grande, miniatura: imagenes[pag].mini,
-        fecha: d.fecha || "", fechaTexto: d.fechaTexto || "", codigoVia: d.codigoVia || "", nombreTramo: d.via || "",
-        tipoAfectacion: TIPOS_AFECTACION.includes(p.tipo) ? p.tipo : "", responsable,
-        observaciones: d.resumen || p.descripcion || ""
-      });
-      if (p.lat != null && p.lon != null) {
-        r.latitud = p.lat; r.longitud = p.lon;
-        r.latitudDMS = decimalADMS(p.lat, true); r.longitudDMS = decimalADMS(p.lon, false);
-        r.origenUbicacion = "pdf";
-        completarDesdeCoordenadas(r);
-      }
-      if (!r.municipio) {
-        const m = enTexto[0] || MUN_POR_NOMBRE[norm(d.municipioTexto)];
-        if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
-      }
-      const falta = [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas", !r.tipoAfectacion && "el tipo de afectación"].filter(Boolean);
-      const otroMun = tieneCoord(r) && enTexto.length && !enTexto.some((m) => m.n === r.municipio)
-        ? `El acta menciona ${enTexto.map((m) => m.n).join(" / ")} y las coordenadas caen en ${r.municipio || "otro municipio"}. Revisa el municipio.` : "";
-      r.mensaje = falta.length ? "No se encontró en el PDF " + falta.join(", ") + ". Complétalo a mano." : otroMun;
-      tramosPdf.push(r);
+    if (!imagenesPagina.has(pdf)) imagenesPagina.set(pdf, {});
+    const cache = imagenesPagina.get(pdf);
+    const pag = Math.min(Math.max(1, p.pagina || 1), pdf.doc.numPages);
+    if (!cache[pag]) {
+      try { cache[pag] = { grande: await LectorPDF.dibujarPagina(pdf.doc, pag, 1100), mini: await LectorPDF.dibujarPagina(pdf.doc, pag, 360) }; }
+      catch (_) { cache[pag] = { grande: "", mini: "" }; }
     }
+    const r = nuevoRegistro({
+      origen: "pdf", estado: "listo", nombreArchivo: pdf.nombre, punto: p.nombre, pagina: pag, pdf,
+      dataUrl: p.foto || cache[pag].grande, miniatura: p.foto || cache[pag].mini,
+      fecha: p.fecha || d.fecha || "", fechaTexto: d.fechaTexto || "", codigoVia: d.codigoVia || "", nombreTramo: d.via || "",
+      tipoAfectacion: TIPOS_AFECTACION.includes(p.tipo) ? p.tipo : "", responsable,
+      observaciones: d.resumen || p.descripcion || ""
+    });
+    if (p.lat != null && p.lon != null) {
+      r.latitud = p.lat; r.longitud = p.lon;
+      r.latitudDMS = decimalADMS(p.lat, true); r.longitudDMS = decimalADMS(p.lon, false);
+      r.origenUbicacion = "pdf";
+      completarDesdeCoordenadas(r);
+    }
+    if (!r.municipio) {
+      const m = enTexto[0] || MUN_POR_NOMBRE[norm(d.municipioTexto)];
+      if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
+    }
+    const falta = [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas", !r.tipoAfectacion && "el tipo de afectación"].filter(Boolean);
+    const otroMun = tieneCoord(r) && enTexto.length && !enTexto.some((m) => m.n === r.municipio)
+      ? `El acta menciona ${enTexto.map((m) => m.n).join(" / ")} y las coordenadas caen en ${r.municipio || "otro municipio"}. Revisa el municipio.` : "";
+    r.mensaje = falta.length ? "No se encontró en el PDF " + falta.join(", ") + ". Complétalo a mano." : otroMun;
+    enriquecer(r, () => { if (regPdf() === r) pintarPdf(); });
+    return r;
+  }
+
+  async function armarTramos(pdf, d) {
+    const puntos = d.puntos.length ? d.puntos : [{ lat: null, lon: null, nombre: "Acta", tipo: d.tipoGeneral, descripcion: "", pagina: 1 }];
+    tramosPdf = [];
+    for (const p of puntos) tramosPdf.push(await crearTramo(pdf, d, p));
     selPdf = 0;
     pintarPdf();
-    tramosPdf.forEach((r) => enriquecer(r, () => { if (regPdf() === r) pintarPdf(); }));
+  }
+
+  // Agrega puntos nuevos (de Gemini o de las fotos). Si ya hay un tramo a menos de 80 m, solo lo completa.
+  const distanciaM = (a, b) => Math.hypot((a.lat - b.lat) * 110574, (a.lon - b.lon) * 111320 * Math.cos(a.lat * Math.PI / 180));
+  async function sumarPuntosPdf(pdf, d, puntos) {
+    let nuevos = 0, completados = 0;
+    for (const p of puntos) {
+      if (pdfActual !== pdf) return { nuevos, completados };
+      const cerca = tramosPdf.find((r) => tieneCoord(r) && distanciaM({ lat: r.latitud, lon: r.longitud }, p) < 80);
+      if (cerca) {
+        if (!cerca.agregado) {
+          let c = false;
+          if (!cerca.fecha && p.fecha) { cerca.fecha = p.fecha; c = true; }
+          if (p.foto && !cerca.fotoPropia) { cerca.dataUrl = p.foto; cerca.miniatura = p.foto; cerca.fotoPropia = true; c = true; }
+          if (c) { cerca.mensaje = /fecha/.test(cerca.mensaje || "") && cerca.fecha ? "" : cerca.mensaje; completados++; }
+        }
+        continue;
+      }
+      // El tramo «Acta» sin coordenadas se reemplaza por el primer punto real
+      const vacio = tramosPdf.findIndex((r) => !tieneCoord(r) && !r.agregado);
+      const r = await crearTramo(pdf, d, p);
+      if (p.foto) r.fotoPropia = true;
+      if (vacio >= 0) tramosPdf.splice(vacio, 1, r); else tramosPdf.push(r);
+      nuevos++;
+    }
+    if (nuevos || completados) pintarPdf();
+    return { nuevos, completados };
+  }
+
+  // Lee el sello (fecha y coordenadas) de cada foto que trae el PDF.
+  // Con el servidor, Gemini lee todas las fotos en una sola consulta (mucho más preciso con fotos pequeñas);
+  // sin servidor, o si Gemini falla, se usa el lector del navegador con reglas para descartar lecturas dudosas.
+  async function achicar(dataUrl, max) {
+    const img = await new Promise((ok, mal) => { const i = new Image(); i.onload = () => ok(i); i.onerror = mal; i.src = dataUrl; });
+    const f = Math.min(1, max / Math.max(img.width, img.height));
+    const cv = document.createElement("canvas"); cv.width = Math.round(img.width * f); cv.height = Math.round(img.height * f);
+    cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+    return cv.toDataURL("image/jpeg", 0.85).split(",")[1];
+  }
+  async function leerFotosPdf(pdf, d) {
+    let fotos = [];
+    try { fotos = await LectorPDF.imagenes(pdf.doc, 16, 300); } catch (_) { return; }
+    if (!fotos.length || pdfActual !== pdf) return;
+    const aviso3 = (t) => { $("#p-fotos").hidden = !t; $("#p-fotos").textContent = t || ""; };
+    let encontrados = [], fuente = "";
+    if (HAY_BACKEND) {
+      aviso3(`· Gemini está leyendo las ${fotos.length} fotos del PDF…`);
+      try {
+        const imgs = await Promise.all(fotos.map((f) => achicar(f.dataUrl, 1400)));
+        const g = await Api.post("leerFotos", { imagenes: imgs });
+        if (g.status === "success" && Array.isArray(g.fotos)) {
+          fuente = "Gemini";
+          g.fotos.filter((x) => x.legible && fotos[x.indice]).forEach((x) => encontrados.push({
+            lat: x.latitud, lon: x.longitud, fecha: x.fecha || "", foto: fotos[x.indice].dataUrl, pagina: fotos[x.indice].pagina, seguro: true }));
+        }
+      } catch (_) {}
+    }
+    if (!fuente) {
+      fuente = "lector del navegador";
+      for (let i = 0; i < fotos.length; i++) {
+        if (pdfActual !== pdf) return;
+        aviso3(`· Leyendo las fotos del PDF (${i + 1} de ${fotos.length})…`);
+        let o = null;
+        try { o = await LectorSello.leer(fotos[i].dataUrl, { rapido: true }); } catch (_) {}
+        if (o && o.latitud != null && o.longitud != null && !o.coordDudosa)
+          encontrados.push({ lat: o.latitud, lon: o.longitud, fecha: o.fecha || "", foto: fotos[i].dataUrl, pagina: fotos[i].pagina, seguro: false });
+      }
+    }
+    aviso3("");
+    if (pdfActual !== pdf) return;
+    // Lecturas del navegador: si el acta ya trae coordenadas, solo se aceptan fotos cerca de ellas (lo lejano suele ser un error de lectura).
+    // Si el acta no trae coordenadas, un punto se acepta cuando al menos 2 fotos coinciden.
+    const conCoord = tramosPdf.filter(tieneCoord).map((r) => ({ lat: r.latitud, lon: r.longitud }));
+    const aceptados = encontrados.filter((p) => p.seguro
+      || (conCoord.length ? conCoord.some((c) => distanciaM(c, p) < 150) : encontrados.filter((q) => q !== p && distanciaM(q, p) < 80).length >= 1));
+    const grupos = [];
+    aceptados.forEach((p) => { if (!grupos.some((g) => distanciaM(g, p) < 80)) grupos.push(p); });
+    const porPagina = {};
+    grupos.forEach((p) => { porPagina[p.pagina] = (porPagina[p.pagina] || 0) + 1; p.nombre = "Foto pág. " + p.pagina + (porPagina[p.pagina] > 1 ? " (" + porPagina[p.pagina] + ")" : ""); p.tipo = d.tipoGeneral; p.descripcion = ""; });
+    const r = await sumarPuntosPdf(pdf, d, grupos);
+    msgPdf(`Fotos del PDF (${fuente}): ${fotos.length} revisadas, ${encontrados.length} con coordenadas en el sello` +
+      (encontrados.length - aceptados.length > 0 ? ` (${encontrados.length - aceptados.length} descartadas por lectura dudosa)` : "") +
+      (r.nuevos ? `; ${r.nuevos} punto(s) nuevo(s)` : "") + (r.completados ? `; ${r.completados} tramo(s) completado(s) con su foto` : "") + ".");
   }
   pintarPdf();
 

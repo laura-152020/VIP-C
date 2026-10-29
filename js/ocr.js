@@ -206,6 +206,15 @@ const LectorSello = (function () {
       .replace(/[%º˚*]/g, "°").replace(/\bV\s?W\b|\bVV\b|\bWV\b/g, "W")
       .split("\n");
 
+    // 0) Hemisferio ANTES de los números: «N 6° 22' 10" W 75° 42' 28"» (sellos de varias apps de cámara)
+    for (const l of [...lineas, lineas.join(" ")]) {
+      const p = l.match(/(?:^|[^A-Z])([NS])\s*[:.]?\s*([0-9][0-9°'". ,]{2,22}?)\s*[,;]?\s*([WO])\s*[:.]?\s*([0-9][0-9°'". ,]{2,22})/);
+      if (p) {
+        const la = leerBloque(p[2], "lat"), lo = leerBloque(p[4], "lon");
+        if (la && lo) return { lat: r6(la.v), lon: r6(-lo.v), latTxt: la.txt, lonTxt: lo.txt, dudoso: !!(la.dudoso || lo.dudoso) };
+      }
+    }
+
     // 1) Grados-minutos-segundos con hemisferio
     let lat = null, lon = null;
     for (const l of lineas) {
@@ -316,14 +325,16 @@ const LectorSello = (function () {
   function puntaje(r) { return (r.latitud != null ? (r.coordDudosa ? 2 : 4) : 0) + (r.fecha ? 2 : 0) + (r.tramo ? 1 : 0); }
 
   /* ---------- Lectura completa ---------- */
-  async function leer(src) {
+  // opciones.rapido: para las fotos de un PDF; basta con leer las coordenadas y se prueban menos variantes
+  async function leer(src, opciones) {
+    const rapido = !!(opciones && opciones.rapido);
     const img = await cargarImagen(src);
     const w = await iniciar();
     // [desde, hasta, modo, umbral de blanco]. El primero sirve casi siempre; los demás cubren fondos claros, sellos más altos o arriba.
     // [desdeY, hastaY, modo, umbral, desdeX]. Los sellos de cámara suelen ir abajo a la derecha: primero esa zona (menos ruido), luego todo el ancho.
     const intentos = [[0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
     let mejor = null, textos = [], textosN = 0;
-    for (const [a, b, modo, umbral, x] of intentos) {
+    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[2], intentos[5], intentos[7]] : intentos)) {
       const { data } = await w.recognize(franja(img, a, b, modo, umbral, x));
       textos.push(data.text);
       const r = interpretar(data.text);
@@ -339,6 +350,7 @@ const LectorSello = (function () {
       }
       textosN = textos.length;
       if (puntaje(mejor) >= 7) break;
+      if (rapido && mejor.latitud != null && !mejor.coordDudosa) break;
       if (textosN >= 3 && mejor.fecha && mejor.tramo && mejor.latitud == null) break; // sello sin coordenadas: no insistir
       if (textosN >= 4 && mejor.fecha && mejor.latitud != null) break;                 // lectura dudosa: no alargar más
     }

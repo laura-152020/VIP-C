@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "6.1.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "6.7.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -115,6 +115,7 @@ function doPost(e) {
     if (payload.accion === "sesion") return json_({ status: "success", usuario: usuario.usuario, nombre: usuario.nombre, rol: usuario.rol });
     if (payload.accion === "leer") return json_(leerSello_(payload));
     if (payload.accion === "leerPdf") return json_(leerPdf_(payload));
+    if (payload.accion === "leerFotos") return json_(leerFotos_(payload));
     if (payload.accion === "arcgis") return json_(consultarCapa_(payload));
     if (payload.accion === "subir") { payload.registradoPor = usuario.usuario; return json_(subirFoto_(payload)); }
     if (payload.accion === "anular") return json_(anularRegistro_(payload));
@@ -896,7 +897,8 @@ function leerPdf_(payload) {
     "codigo_via (código oficial de la vía, ej 05656VT131 o 60AN17), " +
     "via (nombre de la vía o tramo, ej \"El Puerto - La Miserenga\"), " +
     "municipio (municipio de Antioquia donde está la vía), " +
-    "puntos (lista: un elemento por cada sitio con coordenadas distintas, con las claves " +
+    "puntos (lista: un elemento por cada sitio con coordenadas distintas, contando también las coordenadas escritas en los sellos " +
+    "superpuestos de las FOTOGRAFÍAS del documento (léelas con cuidado: grados, minutos y segundos; N/S y W/O), con las claves " +
     "nombre (ej \"Tramo 1\"), latitud (tal cual, ej N 6°22'10\"), longitud (tal cual, ej W 75°42'28\"), " +
     "tipo_afectacion (exactamente uno de: " + TIPOS_AFECTACION.join(" | ") + "), " +
     "descripcion (lo encontrado y lo recomendado en ese sitio, máximo 3 frases), pagina (número de página donde se describe)), " +
@@ -940,6 +942,38 @@ function leerPdf_(payload) {
     resumen: String(d.resumen || "").trim(),
     puntos: puntos
   };
+}
+
+/* ======================= Sellos de varias fotos a la vez (fotos que vienen dentro de un PDF) ======================= */
+function leerFotos_(payload) {
+  const imgs = (Array.isArray(payload.imagenes) ? payload.imagenes : []).slice(0, 16).filter(function (b) { return typeof b === "string" && b.length > 100; });
+  if (!imgs.length) throw new Error("No llegaron fotos.");
+  const key = prop_("GEMINI_API_KEY");
+  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
+  const prompt =
+    "Te envío " + imgs.length + " imágenes en orden (0 a " + (imgs.length - 1) + "), sacadas de un acta de visita vial de Antioquia (Colombia). " +
+    "Muchas son fotos con un sello de texto superpuesto (fecha, hora, coordenadas y lugar), por ejemplo «13/05/26, 8:40 a.m. N 6° 22' 10\" W 75° 42' 28\" Palmitas»; " +
+    "otras son capturas de mapa con coordenadas escritas. Lee EXACTAMENTE lo escrito, sin inventar ni deducir del paisaje. " +
+    "Las fechas numéricas van en formato día/mes/año. Responde SOLO JSON: {\"fotos\":[{\"indice\":0, \"fecha_iso\":\"AAAA-MM-DD o vacío\", " +
+    "\"latitud\":\"tal cual, ej N 6°22'10\\\" o vacío\", \"longitud\":\"tal cual, ej W 75°42'28\\\" o vacío\", \"legible\":true}]} con un elemento por imagen.";
+  const parts = [{ text: prompt }];
+  imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
+  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
+  const res = UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key },
+    payload: JSON.stringify({ contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } }) });
+  const code = res.getResponseCode();
+  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + "." };
+  const r = JSON.parse(res.getContentText());
+  const texto = r && r.candidates && r.candidates[0] && r.candidates[0].content && r.candidates[0].content.parts && r.candidates[0].content.parts[0] && r.candidates[0].content.parts[0].text;
+  let d;
+  try { d = JSON.parse(String(texto || "").replace(/^```json\s*|```$/g, "")); } catch (_) { return { status: "error", message: "No se pudo interpretar la respuesta de Gemini." }; }
+  const fotos = (Array.isArray(d.fotos) ? d.fotos : []).map(function (f) {
+    const lat = dmsADecimal_(f.latitud); let lon = dmsADecimal_(f.longitud);
+    if (lon !== null && lon > 60) lon = -lon;
+    return { indice: Number(f.indice), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
+      legible: !!f.legible && lat !== null && lon !== null && !fueraDeAntioquia_(lat, lon) };
+  });
+  return { status: "success", fotos: fotos };
 }
 
 /* ======================= Guardado (Drive + Sheets) ======================= */
