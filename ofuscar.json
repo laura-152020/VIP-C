@@ -1,0 +1,18 @@
+{
+  "compact": true,
+  "controlFlowFlattening": true,
+  "controlFlowFlatteningThreshold": 0.3,
+  "deadCodeInjection": false,
+  "debugProtection": false,
+  "selfDefending": false,
+  "disableConsoleOutput": false,
+  "identifierNamesGenerator": "hexadecimal",
+  "renameGlobals": false,
+  "transformObjectKeys": false,
+  "stringArray": true,
+  "stringArrayEncoding": ["base64"],
+  "stringArrayThreshold": 0.75,
+  "splitStrings": false,
+  "unicodeEscapeSequence": false,
+  "target": "browser"
+}

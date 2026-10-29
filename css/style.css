@@ -175,3 +175,8 @@ textarea{min-height:64px;resize:vertical}
 .drop--en-panel{padding:20px 16px}
 .drop--en-panel strong{font-size:18px}
 #tarjetas-fotos:empty{display:none}
+.pegar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+/* Protección: el texto de la página no se puede seleccionar (las casillas sí) */
+body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+input,textarea,select,[contenteditable="true"]{-webkit-user-select:text;user-select:text}
+img{-webkit-user-drag:none}

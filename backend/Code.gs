@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "5.7.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "6.1.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -174,8 +174,10 @@ function cifrar_(clave, sal) {
 
 // Escribe un texto literal en una celda (sin que Sheets lo interprete como fórmula, fecha o número)
 function escribirTexto_(h, fila, col, valor) {
-  h.getRange(fila, col).setNumberFormat("@").setValue(String(valor));
+  h.getRange(fila, col).setNumberFormat("@").setValue(celda_(valor));
 }
+// Evita que un texto escrito por un usuario se ejecute como fórmula en el Sheet (=, +, -, @)
+function celda_(v) { const t = texto_(v); return /^[=+\-@\t\r]/.test(t) ? "'" + t : t; }
 
 // Cifra las contraseñas escritas en "ContraseñaNueva" y las borra de la hoja.
 function actualizarUsuarios() {
@@ -944,7 +946,7 @@ function leerPdf_(payload) {
 
 function subirFoto_(p) {
   const faltan = [];
-  if (!texto_(p.fecha)) faltan.push("fecha");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto_(p.fecha))) faltan.push("fecha (AAAA-MM-DD)");
   if (!texto_(p.municipio)) faltan.push("municipio");
   if (!texto_(p.tipoAfectacion)) faltan.push("tipo de afectación");
   if (RESPONSABLES.indexOf(texto_(p.responsable)) < 0) faltan.push("responsable de la visita");
@@ -982,15 +984,15 @@ function subirFoto_(p) {
     const id = siguienteId_(hoja);
     const ahora = Utilities.formatDate(new Date(), "America/Bogota", "yyyy-MM-dd HH:mm:ss");
     hoja.appendRow([
-      id, ahora, texto_(p.fecha), texto_(p.fechaTexto), texto_(p.latitudDMS), texto_(p.longitudDMS),
+      id, ahora, celda_(p.fecha), celda_(p.fechaTexto), celda_(p.latitudDMS), celda_(p.longitudDMS),
       lat === null ? "" : lat, lon === null ? "" : lon,
-      texto_(p.codigoVia).toUpperCase(), texto_(p.nombreTramo), texto_(p.subregion), texto_(p.municipio),
-      texto_(p.tipoAfectacion), texto_(p.responsable), texto_(p.estadoPunto), texto_(p.observaciones),
+      celda_(texto_(p.codigoVia).toUpperCase()), celda_(p.nombreTramo), celda_(p.subregion), celda_(p.municipio),
+      celda_(p.tipoAfectacion), celda_(p.responsable), celda_(p.estadoPunto), celda_(p.observaciones),
       archivo ? (p.origen === "pdf" ? "pdf" : "foto") : "manual",
-      archivo ? archivo.getName() : "", archivo ? archivo.getId() : "", archivo ? archivo.getUrl() : "",
+      archivo ? celda_(archivo.getName()) : "", archivo ? archivo.getId() : "", archivo ? archivo.getUrl() : "",
       texto_(p.origenUbicacion) || "manual", p.selloLegible ? "SI" : "NO",
       fueraDeAntioquia_(lat, lon) ? "SI" : "NO",
-      "ACTIVO", "", "", texto_(p.registradoPor), "", "PENDIENTE", texto_(p.vereda)
+      "ACTIVO", "", "", celda_(p.registradoPor), "", "PENDIENTE", celda_(p.vereda)
     ]);
     fila = hoja.getLastRow();
     idGuardado = id;

@@ -3,7 +3,8 @@
  * municipio y cada punto con coordenadas (un registro por punto), con su tipo de afectación y descripción. */
 const LectorPDF = (function () {
   "use strict";
-  const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+  const PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/";
+  const PDFJS_SRI = "sha384-/1qUCSGwTur9vjf/z9lmu/eCUYbpOTgSjmpbMQZ1/CtX2v/WcAIKqRv+U1DUCG6e"; // huella del archivo: si alguien lo altera, no se ejecuta
   let carga = null;
 
   function cargarLib() {
@@ -11,7 +12,7 @@ const LectorPDF = (function () {
     if (carga) return carga;
     carga = new Promise((ok, mal) => {
       const s = document.createElement("script");
-      s.src = PDFJS + "pdf.min.js";
+      s.src = PDFJS + "pdf.min.js"; s.integrity = PDFJS_SRI; s.crossOrigin = "anonymous";
       s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js"; ok(window.pdfjsLib); };
       s.onerror = () => { carga = null; mal(new Error("No se pudo cargar el lector de PDF. Revisa la conexión a internet.")); };
       document.head.appendChild(s);

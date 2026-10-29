@@ -771,6 +771,40 @@
   ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("is-over"); }));
   ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("is-over"); }));
   drop.addEventListener("drop", (e) => { if (e.dataTransfer?.files?.length) agregarFotos([...e.dataTransfer.files]); });
+  /* Pegar imágenes o PDF copiados (Ctrl+V o botón), sin tener que descargarlos primero */
+  function nombrePegado(f, i) {
+    const d = new Date(), z = (n) => String(n).padStart(2, "0");
+    const ext = (f.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    return new File([f], `pegada_${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}${i ? "_" + (i + 1) : ""}.${ext}`, { type: f.type });
+  }
+  function recibirPegados(files) {
+    const imgs = files.filter((f) => /^image\/(jpeg|png|webp)$/.test(f.type)), pdfs = files.filter((f) => f.type === "application/pdf");
+    if (imgs.length) { agregarFotos(imgs.map(nombrePegado)); $("#seccion-fotos").scrollIntoView({ behavior: "smooth", block: "start" }); }
+    if (pdfs.length) { cargarPDF(pdfs[0]); $("#pdfs").scrollIntoView({ behavior: "smooth", block: "start" }); }
+    return imgs.length + pdfs.length;
+  }
+  document.addEventListener("paste", (e) => {
+    if ($("#app").hidden) return;
+    const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if (!files.length) return; // texto normal: se pega como siempre
+    if (recibirPegados(files)) e.preventDefault();
+  });
+  $("#pegar-foto").addEventListener("click", async () => {
+    const fm = $("#f-msg");
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.read) throw new Error("no");
+      const items = await navigator.clipboard.read(), files = [];
+      for (const it of items) {
+        const tipo = it.types.find((t) => /^image\/(png|jpeg|webp)$/.test(t));
+        if (tipo) files.push(new File([await it.getType(tipo)], "pegada." + tipo.split("/")[1], { type: tipo }));
+      }
+      if (!files.length) { fm.textContent = "No hay ninguna imagen copiada. Copia una foto y vuelve a intentar."; fm.style.color = "var(--err)"; return; }
+      fm.textContent = ""; recibirPegados(files);
+    } catch (_) {
+      fm.textContent = "Este navegador no deja leer lo copiado con el botón. Usa Ctrl+V en la página."; fm.style.color = "var(--err)";
+    }
+  });
+
   const panelPdf = $("#pdfs");
   $("#archivos-pdf").addEventListener("change", (e) => { cargarPDF(e.target.files[0]); e.target.value = ""; });
   ["dragenter", "dragover"].forEach((t) => panelPdf.addEventListener(t, (e) => { if ([...(e.dataTransfer?.types || [])].includes("Files")) { e.preventDefault(); panelPdf.classList.add("is-over"); } }));
