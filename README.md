@@ -187,4 +187,4 @@ guarda en caché las lecturas, el guardado ni ArcGIS.
 **Instalador de Windows:** carpeta `escritorio/` (Electron). Abre la página oficial en una ventana propia: el código
 de la app no va dentro del instalador y siempre se usa la última versión publicada. La dirección se cambia en
 `escritorio/config.json`. Construir: `cd escritorio && npm install && npm run instalador` (en Windows; en Linux
-necesita Wine). Salen `dist/VIP-C-Instalador-1.0.0.exe` y `dist/VIP-C-Portable-1.0.0.exe`.
+necesita Wine). Salen `dist/VIP-C-Instalador-1.1.0.exe` y `dist/VIP-C-Portable-1.1.0.exe`.

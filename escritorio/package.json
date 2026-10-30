@@ -1,7 +1,7 @@
 {
   "name": "vip-c",
   "productName": "VIP-C",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "VIP-C · Visor interactivo de puntos críticos — Gobernación de Antioquia",
   "author": "Secretaría de Infraestructura Física · Gobernación de Antioquia",
   "main": "main.js",
@@ -27,8 +27,11 @@
       "main.js",
       "preload.js",
       "config.json",
+      "splash.html",
+      "acerca.html",
       "sin-conexion.html",
-      "build/icon.png"
+      "build/icon.png",
+      "build/logo.png"
     ],
     "asar": true,
     "win": {
@@ -46,7 +49,17 @@
       "installerLanguages": [
         "es_ES"
       ],
-      "language": "3082"
+      "language": "3082",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "installerSidebar": "build/installerSidebar.bmp",
+      "uninstallerSidebar": "build/uninstallerSidebar.bmp",
+      "installerHeader": "build/installerHeader.bmp",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "menuCategory": "Gobernación de Antioquia",
+      "uninstallDisplayName": "VIP-C"
     },
     "portable": {
       "artifactName": "VIP-C-Portable-${version}.${ext}"

@@ -1,8 +1,8 @@
 /* VIP-C · Service worker de la app instalable.
  * Solo guarda en caché los archivos propios de la página (para abrir rápido y mostrar la pantalla aunque
  * falle la red). Las lecturas, el guardado (Apps Script) y ArcGIS van SIEMPRE por la red: nunca se cachean. */
-const CACHE = "vipc-8.0";
-const BASE = ["./", "index.html", "css/style.css?v=8.0", "img/logo-gobernacion-antioquia-blanco.png?v=8.0",
+const CACHE = "vipc-8.2";
+const BASE = ["./", "index.html", "css/style.css?v=8.2", "img/logo-gobernacion-antioquia-blanco.png?v=8.2",
   "img/app/icono-192.png", "img/app/icono-512.png", "img/app/icono-maskable-512.png", "manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
