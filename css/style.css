@@ -207,3 +207,5 @@ img{-webkit-user-drag:none}
 .vp-pagina.is-actual{outline:3px solid var(--sign)}
 .verificar{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;padding:8px 10px;border:1px dashed var(--line);border-radius:8px;cursor:pointer;width:max-content;max-width:100%}
 .verificar input{width:18px;height:18px;accent-color:var(--brand)}
+.logo-vipc{width:52px;height:52px;border-radius:50%;flex:none}
+@media (max-width:560px){.logo-vipc{width:40px;height:40px}}

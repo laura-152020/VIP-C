@@ -1,0 +1,57 @@
+{
+  "name": "vip-c",
+  "productName": "VIP-C",
+  "version": "1.0.0",
+  "description": "VIP-C · Visor interactivo de puntos críticos — Gobernación de Antioquia",
+  "author": "Secretaría de Infraestructura Física · Gobernación de Antioquia",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "instalador": "electron-builder --win nsis portable --x64"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8",
+    "resedit": "^2.0.3"
+  },
+  "build": {
+    "appId": "co.gov.antioquia.vipc",
+    "productName": "VIP-C",
+    "copyright": "Gobernación de Antioquia",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "config.json",
+      "sin-conexion.html",
+      "build/icon.png"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "artifactName": "VIP-C-Instalador-${version}.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "VIP-C",
+      "installerLanguages": [
+        "es_ES"
+      ],
+      "language": "3082"
+    },
+    "portable": {
+      "artifactName": "VIP-C-Portable-${version}.${ext}"
+    },
+    "afterPack": "./icono-exe.js",
+    "publish": null
+  }
+}

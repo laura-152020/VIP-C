@@ -172,3 +172,19 @@ La página consulta dos capas públicas de ArcGIS Online, directamente desde el 
 - Los límites municipales vienen del Marco Geoestadístico Nacional 2018 del DANE, simplificados. Cerca de un límite el municipio sugerido puede ser el vecino; siempre se puede corregir a mano.
 - La lectura del sello está ajustada a Antioquia: latitud 5° a 9° N y longitud 73° a 77° W. Si un sello no se lee completo, la tarjeta queda en **Revisar** y dice qué falta.
 - Anular un registro guardado (con backend): `POST {accion:"anular", sesion, adminToken, id, motivo}`. La fila queda como `ANULADO` y la foto va a la papelera de Drive.
+
+## Dirección web y aplicación de escritorio (v8.0)
+
+**Página web (gratis):** Cloudflare Pages con el proyecto llamado `vip-c` publica en **https://vip-c.pages.dev**
+(build `sh construir.sh`, carpeta `dist`). Para tener una dirección de ArcGIS como la de Canteras, se crea en
+Experience Builder una experiencia «VIP-C» con un widget **Insertar (Embed)** que apunta a `https://vip-c.pages.dev`;
+`_headers` ya permite que ArcGIS la muestre.
+
+**App instalable (PWA):** `manifest.webmanifest`, `sw.js` y `js/app-instalable.js`. En Chrome o Edge aparece el botón
+«Instalar app» (arriba, junto a «Cerrar sesión») y VIP-C queda como programa con su ícono. El service worker nunca
+guarda en caché las lecturas, el guardado ni ArcGIS.
+
+**Instalador de Windows:** carpeta `escritorio/` (Electron). Abre la página oficial en una ventana propia: el código
+de la app no va dentro del instalador y siempre se usa la última versión publicada. La dirección se cambia en
+`escritorio/config.json`. Construir: `cd escritorio && npm install && npm run instalador` (en Windows; en Linux
+necesita Wine). Salen `dist/VIP-C-Instalador-1.0.0.exe` y `dist/VIP-C-Portable-1.0.0.exe`.
