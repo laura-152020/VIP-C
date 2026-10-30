@@ -39,7 +39,7 @@
       "signAndEditExecutable": false
     },
     "nsis": {
-      "artifactName": "VIP-C-Instalador-${version}.${ext}",
+      "artifactName": "VIP-C-Instalador.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
@@ -62,7 +62,7 @@
       "uninstallDisplayName": "VIP-C"
     },
     "portable": {
-      "artifactName": "VIP-C-Portable-${version}.${ext}"
+      "artifactName": "VIP-C-Portable.${ext}"
     },
     "afterPack": "./icono-exe.js",
     "publish": null

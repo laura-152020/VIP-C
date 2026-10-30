@@ -1,23 +1,52 @@
-/* VIP-C · App instalable (PWA): registra el service worker y muestra el botón «Instalar app»
- * en Chrome y Edge. Ya instalada, VIP-C abre en su propia ventana con su ícono, como un programa. */
+/* VIP-C · Botón «Instalar software».
+ * En Windows descarga el instalador del programa de escritorio (VIP-C-Instalador.exe).
+ * En otros sistemas (Mac, Linux, Chromebook) instala VIP-C como app desde el navegador, si este lo permite.
+ * Dentro del programa de escritorio el botón no aparece. */
 (function () {
   "use strict";
-  if (!("serviceWorker" in navigator) || location.protocol !== "https:") return;
-  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  // Dirección pública del instalador (GitHub Releases). Se puede cambiar con CONFIG.INSTALADOR_URL en js/config.js
+  const INSTALADOR = "https://github.com/laura-152020/vip-c-descargas/releases/latest/download/VIP-C-Instalador.exe";
+  const urlInstalador = () => (typeof CONFIG !== "undefined" && CONFIG.INSTALADOR_URL) || INSTALADOR;
 
+  const enPrograma = !!window.VIPC_ESCRITORIO || /[?&]app=escritorio/.test(location.search);
   const enVentanaApp = matchMedia("(display-mode: standalone)").matches || matchMedia("(display-mode: window-controls-overlay)").matches;
-  const enIframe = window.top !== window.self;            // dentro de ArcGIS Experience Builder no se ofrece instalar
-  let evento = null;
+  const ua = navigator.userAgent || "";
+  const esWindows = /Windows/i.test(ua) && !/Windows Phone/i.test(ua);
+  const esMovil = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+
+  if ("serviceWorker" in navigator && location.protocol === "https:" && !enPrograma) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+  }
+
+  let evento = null;                                    // instalación desde el navegador (Mac, Linux, Chromebook)
   const boton = () => document.getElementById("instalar");
-  window.addEventListener("beforeinstallprompt", (e) => {
-    e.preventDefault(); evento = e;
-    const b = boton(); if (b && !enVentanaApp && !enIframe) b.hidden = false;
-  });
-  window.addEventListener("appinstalled", () => { evento = null; const b = boton(); if (b) b.hidden = true; });
+  const mostrar = (si) => { const b = boton(); if (b) b.hidden = !si; };
+  const avisar = (texto) => {
+    const a = document.getElementById("aviso");
+    if (!a) return;
+    a.textContent = texto; a.className = "aviso"; a.hidden = false;
+    a.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  function preparar() {
+    if (enPrograma || enVentanaApp || esMovil) return mostrar(false);
+    if (esWindows) return mostrar(true);
+    mostrar(!!evento);
+  }
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); evento = e; preparar(); });
+  window.addEventListener("appinstalled", () => { evento = null; preparar(); });
+  document.addEventListener("DOMContentLoaded", preparar);
+
   document.addEventListener("click", async (e) => {
-    if (!e.target.closest || !e.target.closest("#instalar") || !evento) return;
-    evento.prompt();
-    await evento.userChoice.catch(() => null);
-    evento = null; boton().hidden = true;
+    if (!e.target.closest || !e.target.closest("#instalar")) return;
+    if (esWindows) {
+      const a = document.createElement("a");
+      a.href = urlInstalador(); a.rel = "noopener"; a.setAttribute("download", "VIP-C-Instalador.exe");
+      document.body.appendChild(a); a.click(); a.remove();
+      avisar("Descargando el instalador de VIP-C. Ábrelo cuando termine y sigue los pasos. " +
+        "Si Windows muestra «Windows protegió su PC», toca «Más información» y luego «Ejecutar de todas formas».");
+      return;
+    }
+    if (evento) { evento.prompt(); await evento.userChoice.catch(() => null); evento = null; preparar(); }
   });
 })();
