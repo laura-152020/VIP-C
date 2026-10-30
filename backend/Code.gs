@@ -71,7 +71,7 @@ const MINUTOS_CODIGO = 30;       // vigencia del código de verificación enviad
 const HORAS_SESION = 8;
 const INTENTOS_MAX = 5;          // intentos fallidos antes de bloquear
 const MINUTOS_BLOQUEO = 15;
-const RESPONSABLES = ["Gobernación", "Rental", "Alcaldía", "Ciudadanía"];
+const RESPONSABLES = ["Gobernación", "Rentan", "Alcaldía", "Ciudadanía"];
 const TIPOS_AFECTACION = ["Deslizamiento / movimiento en masa", "Pérdida de banca", "Hundimiento de la vía",
   "Socavación", "Caída de rocas", "Obstrucción de drenaje o alcantarilla", "Daño en puente o pontón",
   "Daño en muro de contención", "Deterioro de la calzada (baches)", "Inundación", "Árbol caído", "Otro"];
@@ -82,7 +82,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.3.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.4.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -908,7 +908,7 @@ function leerPdf_(payload) {
     "codigo_via (código oficial de la vía, ej 05656VT131 o 60AN17), " +
     "via (nombre de la vía o tramo, ej \"El Puerto - La Miserenga\"), " +
     "municipio (municipio de Antioquia donde está la vía), " +
-    "responsable (quién hizo la visita, exactamente uno de: " + RESPONSABLES.join(" | ") + "; Rental = Renting de Antioquia/RENTAN y sus contratistas o interventorías; vacío si no es claro), " +
+    "responsable (quién hizo la visita, exactamente uno de: " + RESPONSABLES.join(" | ") + "; Rentan = RENTAN y sus contratistas o interventorías; vacío si no es claro), " +
     "puntos (lista: un elemento por cada SITIO o AFECTACIÓN distinta que describa el documento, sin importar el formato del documento: " +
     "puede identificarse por coordenadas, por abscisa PR/K (ej PR 18+200, K25+300), por número de tramo o por el nombre del lugar; " +
     "incluye también los sitios cuyas coordenadas solo aparecen en los sellos superpuestos de las FOTOGRAFÍAS de campo (léelas con cuidado: grados, minutos y segundos; N/S y W/O); " +
@@ -956,7 +956,7 @@ function leerPdf_(payload) {
     via: String(d.via || "").replace(/^\s*v[ií]a\s*/i, ""),
     municipio: String(d.municipio || ""),
     resumen: String(d.resumen || "").trim(),
-    responsable: RESPONSABLES.indexOf(d.responsable) >= 0 ? d.responsable : "",
+    responsable: d.responsable === "Rental" ? "Rentan" : (RESPONSABLES.indexOf(d.responsable) >= 0 ? d.responsable : ""),
     puntos: puntos
   };
 }
@@ -997,6 +997,7 @@ function leerFotos_(payload) {
 /* ======================= Guardado (Drive + Sheets) ======================= */
 
 function subirFoto_(p) {
+  if (texto_(p.responsable) === "Rental") p.responsable = "Rentan";   // nombre anterior de la opción
   const faltan = [];
   if (!/^\d{4}-\d{2}-\d{2}$/.test(texto_(p.fecha))) faltan.push("fecha (AAAA-MM-DD)");
   if (!texto_(p.municipio)) faltan.push("municipio");

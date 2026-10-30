@@ -11,7 +11,7 @@
     "Socavación", "Caída de rocas", "Obstrucción de drenaje o alcantarilla", "Daño en puente o pontón",
     "Daño en muro de contención", "Deterioro de la calzada (baches)", "Inundación", "Árbol caído", "Otro"
   ];
-  const RESPONSABLES = ["Gobernación", "Rental", "Alcaldía", "Ciudadanía"];
+  const RESPONSABLES = ["Gobernación", "Rentan", "Alcaldía", "Ciudadanía"];
   const ESTADOS = ["Crítico", "No crítico"];
   const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 };
   const HAY_BACKEND = typeof CONFIG !== "undefined" && !!CONFIG.API_URL;

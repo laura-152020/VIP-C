@@ -44,7 +44,7 @@ backend/appsscript.json          Manifiesto del Apps Script
 | Subregión | Automática a partir del municipio |
 | Municipio * | Automático: por coordenadas; si la foto no trae coordenadas, por el nombre escrito en el sello (ej. «Grada el peñol» → El Peñol) |
 | Tipo de afectación * | Lista desplegable. Con el backend conectado, Gemini lo sugiere mirando la foto |
-| Responsable de la visita * | Gobernación · Rental · Alcaldía · Ciudadanía |
+| Responsable de la visita * | Gobernación · Rentan · Alcaldía · Ciudadanía |
 | Observaciones | Texto libre (sin relleno automático) |
 
 \* Obligatorio. Además se exige el **código de la vía o el nombre del tramo**, al menos uno de los dos.
