@@ -271,12 +271,12 @@
   $("#m-agregar").addEventListener("click", () => {
     const f = faltantes(manual);
     if (f.length) { marcar(formManual, f); msgManual("Falta: " + textoFaltantes(f) + ".", true); return; }
-    const r = Object.assign(manual, { estado: "listo", origen: "manual" });
+    // Agregar NO guarda: el registro queda en «Registros» para verificarlo; se guarda con «Guardar datos»
+    const r = Object.assign(manual, { estado: "listo", origen: "manual", enLista: true, verificado: false });
     items.unshift(r);
     manual = nuevoRegistro({ fecha: hoy(), responsable: r.responsable }); // el formulario queda en blanco
     pintarManual(); render();
-    msgManual("Guardando…");
-    guardarLista([r]).then((x) => msgManual(x.texto, x.error));
+    msgManual("Agregado a «Registros»: revísalo, marca «Verifiqué la información» y toca «Guardar datos».");
   });
   $("#m-limpiar").addEventListener("click", () => { manual = nuevoRegistro({ fecha: hoy() }); pintarManual(); msgManual(""); });
 
@@ -532,14 +532,13 @@
   $("#p-limpiar").addEventListener("click", limpiarPdf);
 
   function pasarALista(lista) {
-    const copias = lista.map((r) => { r.agregado = true; return Object.assign({}, r, { estado: "listo", mensaje: "" }); });
+    const copias = lista.map((r) => { r.agregado = true; return Object.assign({}, r, { estado: "listo", mensaje: "", enLista: true, verificado: false }); });
     items.unshift(...copias.slice().reverse());
     render();
     const sig = tramosPdf.findIndex((x) => !x.agregado);
     const nombres = lista.map((x) => x.punto).join(", ");
     if (sig < 0) limpiarPdf(); else { selPdf = sig; pintarPdf(); }
-    msgPdf("Guardando " + nombres + "…");
-    guardarLista(copias).then((x) => msgPdf(x.texto + (sig >= 0 && tramosPdf[sig] ? ` Sigue con ${tramosPdf[sig].punto}.` : ""), x.error));
+    msgPdf(`${nombres} agregado${lista.length > 1 ? "s" : ""} a «Registros»: revísalo, marca «Verifiqué la información» y toca «Guardar datos».` + (sig >= 0 && tramosPdf[sig] ? ` Sigue con ${tramosPdf[sig].punto}.` : ""));
   }
   $("#p-agregar").addEventListener("click", () => {
     if (!pdfActual) { msgPdf("Primero elige un PDF.", true); return; }
@@ -824,16 +823,19 @@
     const esFoto = r.origen === "foto", esPdf = r.origen === "pdf", conImagen = !!r.miniatura;
     const bloqueado = r.estado === "guardado" || r.estado === "guardando" || r.estado === "leyendo";
     const cls = ["card", conImagen ? "" : "is-manual", r.estado === "guardado" ? "is-guardado" : "", r.estadoPunto === "Crítico" ? "is-critico" : ""].join(" ");
-    const etiqueta = r.estado === "listo" && !esFoto && !esPdf ? "Carga manual" : (r.estado === "listo" && esPdf ? "Listo · PDF" : ETIQUETAS[r.estado]);
+    const porVerificar = r.enLista && ["listo", "revisar", "error"].includes(r.estado);
+    const etiqueta = porVerificar && r.estado !== "error" ? (r.verificado ? "Verificado" : "Por verificar")
+      : r.estado === "listo" && !esFoto && !esPdf ? "Carga manual" : (r.estado === "listo" && esPdf ? "Listo · PDF" : ETIQUETAS[r.estado]);
     const nombre = esFoto ? r.nombreArchivo : esPdf ? r.nombreArchivo + (r.punto ? " · " + r.punto : "") : "Registro sin foto";
     return `<article class="${cls}" data-id="${r.id}">
       ${conImagen ? `<button type="button" class="card__foto" data-act="ver" aria-label="${esPdf ? "Ver página del PDF" : "Ver foto completa"}"><img src="${r.miniatura}" alt="${esPdf ? "Página" : "Foto"} ${esc(r.nombreArchivo)}"><span>Ampliar</span></button>` : ""}
       <div class="card__cuerpo">
-        <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado}">${etiqueta}</span></div>
+        <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
+        ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">
-          ${esFoto && ["listo", "revisar", "error"].includes(r.estado) ? '<button type="button" class="btn btn--sm btn--primary" data-act="agregar">Agregar a la lista</button>' : ""}
+          ${esFoto && !r.enLista && ["listo", "revisar", "error"].includes(r.estado) ? '<button type="button" class="btn btn--sm btn--primary" data-act="agregar">Agregar a la lista</button>' : ""}
           ${esFoto && r.estado !== "guardado" && r.estado !== "leyendo" && r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="releer">Volver a leer la foto</button>' : ""}
           ${r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="quitar">Quitar de la lista</button>' : ""}
         </div>
@@ -843,7 +845,7 @@
 
   function render() {
     // Las fotos se muestran dentro de su sección (2); la carga manual y los PDF, en «Registros»
-    const enSeccion = (r) => r.origen === "foto" && r.estado !== "guardado"; // una foto guardada pasa a «Registros»
+    const enSeccion = (r) => r.origen === "foto" && !r.enLista && r.estado !== "guardado"; // al agregarla pasa a «Registros»
     const fotos = items.filter(enSeccion), otros = items.filter((r) => !enSeccion(r));
     $("#tarjetas-fotos").innerHTML = fotos.map(tarjeta).join("");
     $("#tarjetas").innerHTML = otros.length ? otros.map(tarjeta).join("")
@@ -855,18 +857,20 @@
     if (el) el.outerHTML = tarjeta(r);
     contadores();
   }
-  const pendientes = () => items.filter((r) => ["listo", "revisar", "error", "manual"].includes(r.estado));
+  // Pendientes = registros agregados a «Registros» que aún no se han guardado
+  const pendientes = () => items.filter((r) => r.enLista && ["listo", "revisar", "error", "manual"].includes(r.estado));
   function contadores() {
     const p = pendientes().length, leyendo = items.filter((r) => r.estado === "leyendo").length;
     const guardados = items.filter((r) => r.estado === "guardado").length;
     $("#n-listas").textContent = p;
-    $("#n-texto").textContent = p === 1 ? "pendiente" : "pendientes";
     $("#n-leyendo").textContent = leyendo ? "· " + leyendo + " leyendo" : "";
     $("#resumen").textContent = items.length ? `${items.length} en la lista${HAY_BACKEND ? " · " + guardados + " guardados" : ""}` : "";
+    const verificados = pendientes().filter((r) => r.verificado).length;
     $("#guardar").disabled = !p || guardando;
-    // Sin pendientes no hay nada que guardar: el botón lo dice claro en vez de verse apagado sin explicación
-    $("#guardar").textContent = guardando ? "Guardando…" : (!p && guardados ? "✓ Todo guardado" : (p > 1 ? `Guardar ${p} pendientes` : "Guardar datos"));
-    $("#guardar").title = !p ? (guardados ? "Todos los registros ya están guardados en Drive, Sheets y ArcGIS." : "Agrega un registro desde las secciones 1, 2 o 3.") : "Guarda los registros pendientes o con error.";
+    // El botón dice cuántos registros verificados se van a guardar (Drive, Sheet y ArcGIS)
+    $("#guardar").textContent = guardando ? "Guardando…" : (!p && guardados ? "✓ Todo guardado" : (!p ? "Guardar datos" : (verificados ? `Guardar ${verificados} verificado${verificados > 1 ? "s" : ""}` : "Verifica para guardar")));
+    $("#guardar").title = !p ? (guardados ? "Todos los registros ya están guardados en Drive, Sheets y ArcGIS." : "Agrega un registro desde las secciones 1, 2 o 3.") : "Guarda en Drive, Sheet y ArcGIS los registros marcados como verificados.";
+    $("#n-texto").textContent = (p === 1 ? "pendiente" : "pendientes") + (p ? ` · ${verificados} verificado${verificados === 1 ? "" : "s"}` : "");
   }
 
   const buscar = (el) => items.find((x) => x.id == el.closest(".card")?.dataset.id);
@@ -877,7 +881,11 @@
     alEditar(r, e.target, card, () => actualizar(r));
     if (e.target.dataset.k === "estadoPunto") card.classList.toggle("is-critico", r.estadoPunto === "Crítico");
   });
-  $(sel).addEventListener("change", (e) => { const r = buscar(e.target); if (r) alCambiar(r, e.target, () => actualizar(r)); });
+  $(sel).addEventListener("change", (e) => {
+    const r = buscar(e.target); if (!r) return;
+    if (e.target.dataset.act === "verificar") { r.verificado = e.target.checked; if (r.verificado) aviso(""); actualizar(r); return; }
+    alCambiar(r, e.target, () => actualizar(r));
+  });
   $(sel).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-act]"); if (!b) return;
     const r = buscar(b); if (!r) return;
@@ -886,8 +894,8 @@
       const f = faltantes(r), card = b.closest(".card");
       const fm = $("#f-msg"), msgF = (t, e) => { fm.textContent = t; fm.style.color = e ? "var(--err)" : ""; };
       if (f.length) { marcar(card, f); msgF("Falta: " + textoFaltantes(f) + ".", true); return; }
-      msgF("Guardando " + r.nombreArchivo + "…");
-      guardarLista([r]).then((x) => msgF(x.texto, x.error));
+      r.enLista = true; r.verificado = false; render();
+      msgF(r.nombreArchivo + " agregada a «Registros»: revísalo, marca «Verifiqué la información» y toca «Guardar datos».");
       return;
     }
     if (b.dataset.act === "releer") { cola.push(r); r.estado = "leyendo"; actualizar(r); procesarCola(); }
@@ -984,7 +992,8 @@
   }
 
   $("#guardar").addEventListener("click", async () => {
-    const lista = pendientes();
+    const lista = pendientes().filter((r) => r.verificado);
+    if (!lista.length) { aviso("Marca «Verifiqué la información» en los registros que ya revisaste para poder guardarlos.", true); $("#h-registros").scrollIntoView({ behavior: "smooth", block: "start" }); return; }
     const malos = validarTodos(lista);
     if (malos) { aviso(`${malos} registro(s) con datos obligatorios vacíos (marcados en rojo). Complétalos para guardar.`, true); return; }
     const r = await guardarLista(lista);
