@@ -12,3 +12,11 @@
 
 /manifest.webmanifest
   Content-Type: application/manifest+json
+
+/descargas/*
+  Content-Type: application/octet-stream
+  Cache-Control: public, max-age=86400
+
+/descargas/instalador.json
+  Content-Type: application/json
+  Cache-Control: no-cache

@@ -4,7 +4,7 @@
 # La carpeta backend/, escritorio/ y el README no se publican.
 set -e
 rm -rf dist && mkdir -p dist/js
-cp -r index.html css img _headers manifest.webmanifest sw.js robots.txt dist/
+cp -r index.html css img descargas _headers manifest.webmanifest sw.js robots.txt dist/
 cp js/municipios.js dist/js/                        # datos públicos: se copian tal cual
 for f in app ocr lectorpdf capas proteccion app-instalable config; do
   npx --yes javascript-obfuscator@4.1.1 "js/$f.js" --output "dist/js/$f.js" --config ofuscar.json

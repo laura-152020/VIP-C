@@ -198,3 +198,10 @@ necesita Wine). Salen `dist/VIP-C-Instalador-1.1.0.exe` y `dist/VIP-C-Portable-1
 - `_headers` + `robots.txt`: los buscadores no indexan ni archivan la página.
 - Programa de escritorio: sin herramientas de desarrollador, se cierra si se abre con opciones de depuración y el
   ejecutable tiene los «fuses» de Electron que impiden usarlo para correr otro código.
+
+## Descarga del instalador desde la página (v8.5)
+
+El botón «Instalar software» descarga `VIP-C-Instalador.exe` desde la misma página (`descargas/`), sin repositorios
+públicos: el archivo está en partes de 20 MB (Cloudflare acepta hasta 25 MB por archivo), el navegador las une y
+comprueba la huella SHA-256. Para publicar un instalador nuevo: `cd escritorio && npm run instalador && node publicar-instalador.js`
+y luego `git push`.

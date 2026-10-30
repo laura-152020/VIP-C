@@ -1,0 +1,12 @@
+{
+  "version": "1.2.0",
+  "nombre": "VIP-C-Instalador.exe",
+  "tamano": 81526484,
+  "sha256": "cb1b2307cf81486fd0b602ce230984408b11bfc3d10effa0f2741907b6456395",
+  "partes": [
+    "VIP-C-1.2.0.parte0",
+    "VIP-C-1.2.0.parte1",
+    "VIP-C-1.2.0.parte2",
+    "VIP-C-1.2.0.parte3"
+  ]
+}
