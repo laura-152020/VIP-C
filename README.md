@@ -188,3 +188,13 @@ guarda en caché las lecturas, el guardado ni ArcGIS.
 de la app no va dentro del instalador y siempre se usa la última versión publicada. La dirección se cambia en
 `escritorio/config.json`. Construir: `cd escritorio && npm install && npm run instalador` (en Windows; en Linux
 necesita Wine). Salen `dist/VIP-C-Instalador-1.1.0.exe` y `dist/VIP-C-Portable-1.1.0.exe`.
+
+## Protección del código (v8.4)
+
+- `construir.sh` ofusca todo el JavaScript (incluido `config.js`) con `ofuscar.json`: cadenas cifradas (RC4), flujo de
+  control alterado, código señuelo, autodefensa (deja de funcionar si se «embellece») y bloqueo contra el depurador.
+- **Bloqueo de dominio:** el código solo funciona en `vip-c.pages.dev` (y sus subdominios de vista previa). Copiado a
+  otro sitio, la página queda en blanco. Si se cambia de dirección, actualizar `domainLock` en `ofuscar.json`.
+- `_headers` + `robots.txt`: los buscadores no indexan ni archivan la página.
+- Programa de escritorio: sin herramientas de desarrollador, se cierra si se abre con opciones de depuración y el
+  ejecutable tiene los «fuses» de Electron que impiden usarlo para correr otro código.

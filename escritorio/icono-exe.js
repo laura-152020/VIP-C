@@ -24,4 +24,16 @@ module.exports = async function (ctx) {
   res.outputResource(nuevo);
   fs.writeFileSync(exe, Buffer.from(nuevo.generate()));
   console.log("  • ícono y datos de VIP-C aplicados a", path.basename(exe));
+
+  // Seguridad del ejecutable: nadie puede usar VIP-C.exe para correr código propio ni abrir un depurador
+  const { flipFuses, FuseVersion, FuseV1Options } = require("@electron/fuses");
+  await flipFuses(exe, {
+    version: FuseVersion.V1,
+    [FuseV1Options.RunAsNode]: false,                         // sin ELECTRON_RUN_AS_NODE
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false, // sin NODE_OPTIONS
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,     // sin --inspect
+    [FuseV1Options.OnlyLoadAppFromAsar]: true,                // solo carga la app empaquetada
+    [FuseV1Options.EnableCookieEncryption]: true              // cookies cifradas en el disco
+  });
+  console.log("  • protecciones del ejecutable activadas");
 };

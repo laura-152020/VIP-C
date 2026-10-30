@@ -3,7 +3,9 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: geolocation=(self "https://experience.arcgis.com"), camera=(self), microphone=(), clipboard-read=(self "https://experience.arcgis.com")
-  Strict-Transport-Security: max-age=31536000
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Robots-Tag: noindex, nofollow, noarchive
+  Cross-Origin-Opener-Policy: same-origin
 
 /sw.js
   Cache-Control: no-cache

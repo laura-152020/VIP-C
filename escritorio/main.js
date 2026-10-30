@@ -10,6 +10,9 @@ const VERDE = "#1d2711";
 const archivo = (f) => path.join(__dirname, f);
 
 app.setAppUserModelId("co.gov.antioquia.vipc");      // ícono y nombre correctos en la barra de tareas
+// Si alguien intenta abrir el programa con opciones de depuración, se cierra
+if (app.isPackaged && process.argv.some((a) => /^--(remote-debugging|inspect|js-flags|remote-allow-origins)/i.test(a))) app.exit(0);
+app.commandLine.removeSwitch && app.commandLine.removeSwitch("remote-debugging-port");
 if (!app.requestSingleInstanceLock()) app.quit();
 let win = null, splash = null, acerca = null;
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.show(); win.focus(); } });
@@ -73,6 +76,7 @@ function crear() {
   setTimeout(mostrar, 20000);              // si el servidor tarda mucho, se muestra igual
 
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) shell.openExternal(url); return { action: "deny" }; });
+  if (app.isPackaged) win.webContents.on("devtools-opened", () => win.webContents.closeDevTools());
   win.webContents.on("will-navigate", (ev, url) => {
     if (url.startsWith("vipc://")) { ev.preventDefault(); cargar(); return; }
     if (!esPropio(url)) { ev.preventDefault(); if (/^https?:/i.test(url)) shell.openExternal(url); }
