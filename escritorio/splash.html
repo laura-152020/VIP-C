@@ -7,19 +7,18 @@ body{background:radial-gradient(120% 90% at 50% 0%,#33441d 0%,#1d2711 60%,#141b0
 img{width:132px;height:132px;filter:drop-shadow(0 10px 24px rgba(0,0,0,.45));animation:entra .6s ease-out both}
 h1{margin:20px 0 2px;font-size:30px;font-weight:700;letter-spacing:.06em}
 p{margin:0;font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:#d7dfc9}
-.carga{margin-top:30px;width:200px;height:3px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden}
-.carga i{display:block;height:100%;width:40%;border-radius:3px;background:#f2b705;animation:va 1.2s ease-in-out infinite}
-.estado{margin-top:12px;font-size:12px;color:#aeb99d;letter-spacing:0;text-transform:none}
+.carga{margin-top:30px;width:260px;height:4px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden}
+.carga i{display:block;height:100%;width:0;border-radius:4px;background:#f2b705;transition:width .9s ease-out}
+.pie-carga{margin-top:8px;width:260px;display:flex;justify-content:space-between;font-size:11.5px;color:#aeb99d}
 footer{position:absolute;bottom:14px;left:0;right:0;display:flex;justify-content:space-between;padding:0 18px;font-size:11px;color:#8d9a7b}
-@keyframes va{0%{transform:translateX(-100%)}100%{transform:translateX(250%)}}
 @keyframes entra{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){img,.carga i{animation:none}}
+@media (prefers-reduced-motion:reduce){img{animation:none}}
 </style></head>
 <body>
 <img src="build/logo.png" alt="">
 <h1>VIP-C</h1>
 <p>Visor interactivo de puntos críticos</p>
-<div class="carga"><i></i></div>
-<div class="estado">Conectando con el servidor…</div>
+<div class="carga"><i id="barra"></i></div>
+<div class="pie-carga"><span id="estado">Iniciando…</span><span id="pct">0 %</span></div>
 <footer><span>Gobernación de Antioquia</span><span id="v"></span></footer>
 </body></html>

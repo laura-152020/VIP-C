@@ -1,7 +1,7 @@
 {
   "name": "vip-c",
   "productName": "VIP-C",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "VIP-C · Visor interactivo de puntos críticos — Gobernación de Antioquia",
   "author": "Secretaría de Infraestructura Física · Gobernación de Antioquia",
   "main": "main.js",

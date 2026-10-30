@@ -4,7 +4,11 @@
  * Para cambiar la dirección, edita "url" en config.json y vuelve a construir el instalador. */
 const { app, BrowserWindow, Menu, shell, session, ipcMain, nativeTheme, screen } = require("electron");
 const path = require("path"), fs = require("fs");
-const URL_APP = new URL(process.env.VIPC_URL || require("./config.json").url);
+const CONFIG = require("./config.json");
+const URL_APP = new URL(process.env.VIPC_URL || CONFIG.url);
+const INICIO_MS = Math.max(1.5, Number(process.env.VIPC_INICIO || CONFIG.inicioSegundos || 25)) * 1000; // duración de la pantalla de inicio
+const ETAPAS = ["Conectando con el servidor…", "Verificando conexión segura…", "Cargando red vial y división política…",
+  "Preparando lectura de fotografías…", "Preparando lectura de PDF…", "Abriendo VIP-C…"];
 const esPropio = (u) => { try { return new URL(u).origin === URL_APP.origin; } catch (_) { return false; } };
 const VERDE = "#1d2711";
 const archivo = (f) => path.join(__dirname, f);
@@ -42,7 +46,17 @@ function mostrarSplash() {
   splash.loadFile(archivo("splash.html"));
   splash.once("ready-to-show", () => {
     splash.show();
+    const t0 = Date.now();
+    const pintar = () => {
+      if (!splash || splash.isDestroyed()) return;
+      const f = Math.min(1, (Date.now() - t0) / INICIO_MS);
+      const pct = Math.round(f * 100), etapa = ETAPAS[Math.min(ETAPAS.length - 1, Math.floor(f * ETAPAS.length))];
+      splash.webContents.executeJavaScript(`document.getElementById("barra").style.width="${pct}%";
+        document.getElementById("pct").textContent="${pct} %";document.getElementById("estado").textContent=${JSON.stringify(etapa)};`).catch(() => {});
+      if (f < 1) setTimeout(pintar, 250);
+    };
     splash.webContents.executeJavaScript(`document.getElementById("v").textContent = "Versión ${app.getVersion()}"`).catch(() => {});
+    pintar();
   });
 }
 
@@ -70,10 +84,10 @@ function crear() {
       if (e.maximizada) win.maximize();
       win.show(); win.focus();
       if (splash && !splash.isDestroyed()) splash.close(); splash = null;
-    }, Math.max(0, 1500 - (Date.now() - inicio)));
+    }, Math.max(0, INICIO_MS - (Date.now() - inicio)));
   };
   win.webContents.once("did-finish-load", mostrar);
-  setTimeout(mostrar, 20000);              // si el servidor tarda mucho, se muestra igual
+  setTimeout(mostrar, INICIO_MS + 15000);  // si el servidor tarda mucho, se muestra igual
 
   win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/i.test(url)) shell.openExternal(url); return { action: "deny" }; });
   if (app.isPackaged) win.webContents.on("devtools-opened", () => win.webContents.closeDevTools());
