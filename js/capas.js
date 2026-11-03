@@ -195,14 +195,39 @@ const Capas = (function () {
 
   /* ---------- Catálogo código ↔ nombre de toda la red vial ---------- */
   let catalogo = null;
+  const CLAVE_CACHE = "vipc-redvial-v1", DIAS_CACHE = 7;
+  function desdeCache() {
+    try {
+      const c = JSON.parse(localStorage.getItem(CLAVE_CACHE) || "null");
+      if (!c || !Array.isArray(c.v) || Date.now() - c.t > DIAS_CACHE * 864e5 || c.v.length < 10) return null;
+      const porCodigo = new Map(), porNombre = new Map();
+      c.v.forEach(([cod, nom, o]) => {
+        const v = { codigo: cod, nombre: nom, orden: ORDEN[o] || "" };
+        const kc = normCodigo(cod); if (!porCodigo.has(kc)) porCodigo.set(kc, v);
+        const kn = normNombre(nom); if (!porNombre.has(kn)) porNombre.set(kn, v);
+      });
+      return { porCodigo, porNombre };
+    } catch (_) { return null; }
+  }
+  function aCache(c) {
+    try {
+      const vistos = new Set(), v = [];
+      [...c.porCodigo.values(), ...c.porNombre.values()].forEach((x) => { const k = x.codigo + "|" + x.nombre; if (!vistos.has(k)) { vistos.add(k); v.push([x.codigo, x.nombre, ORDEN.indexOf(x.orden)]); } });
+      if (v.length >= 10) localStorage.setItem(CLAVE_CACHE, JSON.stringify({ t: Date.now(), v }));
+    } catch (_) { /* sin espacio o sin almacenamiento: se vuelve a consultar la próxima vez */ }
+  }
   function cargarCatalogo() {
     if (catalogo) return catalogo;
+    const guardado = desdeCache();
+    if (guardado) { catalogo = Promise.resolve(guardado); return catalogo; } // abre al instante: la red vial casi no cambia
     catalogo = (async () => {
       const porCodigo = new Map(), porNombre = new Map();
-      for (const [k, capa] of RED_VIAL.entries()) {
+      let fallos = 0;
+      // Las 3 capas (primaria, secundaria, terciaria) se consultan al mismo tiempo
+      await Promise.all([...RED_VIAL.entries()].map(async ([k, capa]) => {
         try {
           const c = await camposVia(capa);
-          if (!c.codigo || !c.nombre) continue;
+          if (!c.codigo || !c.nombre) return;
           for (let offset = 0, vuelta = 0; vuelta < 30; vuelta++) {
             const base = { where: "1=1", outFields: c.codigo + "," + c.nombre, returnGeometry: "false", resultOffset: String(offset), resultRecordCount: "2000" };
             let d;
@@ -223,9 +248,11 @@ const Capas = (function () {
             if (d.sinPaginar || !d.exceededTransferLimit || !fs.length) break;
             offset += fs.length;
           }
-        } catch (e) { console.warn("[VIP-C capas] catálogo", capa, e.message); }
-      }
-      return { porCodigo, porNombre };
+        } catch (e) { fallos++; console.warn("[VIP-C capas] catálogo", capa, e.message); }
+      }));
+      const c = { porCodigo, porNombre };
+      if (!fallos) aCache(c); // solo se guarda la red vial completa
+      return c;
     })();
     catalogo.catch(() => { catalogo = null; });
     return catalogo;

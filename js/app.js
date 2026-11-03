@@ -180,14 +180,22 @@
     if (!lista || !r || typeof Capas === "undefined") return;
     cerrarListas(lista);
     const n = ++pedidoLista;
-    lista.hidden = false;
+    lista.hidden = false; lista._listo = false;
     c.querySelectorAll('[aria-controls="' + lista.id + '"]').forEach((i) => i.setAttribute("aria-expanded", "true"));
     if (!lista.innerHTML) lista.innerHTML = '<div class="combo__vacio"><span class="girando" aria-hidden="true"></span> Cargando la red vial…</div>';
-    const [cerca, todas] = await Promise.all([
-      tieneCoord(r) ? Capas.viasCercanas(r.latitud, r.longitud, 1500, 6).catch(() => []) : Promise.resolve([]),
-      Capas.buscarVias(texto || "", 60).catch(() => null)
-    ]);
-    if (n !== pedidoLista || lista.hidden) return;
+    const pCerca = tieneCoord(r) ? Capas.viasCercanas(r.latitud, r.longitud, 1500, 6).catch(() => []) : Promise.resolve([]);
+    const pTodas = Capas.buscarVias(texto || "", 60).catch(() => null);
+    // Lo que llegue primero se muestra ya (las vías cercanas suelen llegar antes que la red vial completa)
+    const pintar = (cerca, todas, cargando) => {
+      if (n !== pedidoLista || lista.hidden) return;
+      pintarLista(lista, texto, cerca, todas, cargando);
+    };
+    pCerca.then((c) => { if (!lista._listo) pintar(c, [], true); });
+    const [cerca, todas] = await Promise.all([pCerca, pTodas]);
+    lista._listo = true;
+    pintar(cerca, todas, false);
+  }
+  function pintarLista(lista, texto, cerca, todas, cargando) {
     const ops = [];
     const op = (v, extra) => { ops.push(v); return `<button type="button" class="combo__op" role="option" data-op="${ops.length - 1}"><b>${esc(v.nombre || "(sin nombre)")}</b><span>${esc(v.codigo || "")}</span>${extra ? `<small>${extra}</small>` : ""}</button>`; };
     let html = "";
@@ -198,6 +206,7 @@
     else {
       const resto = todas.filter((v) => !cercaF.some((x) => x.codigo === v.codigo && x.nombre === v.nombre));
       if (resto.length) html += `<div class="combo__grupo">${q ? "Red vial · coincidencias" : "Red vial (Circular 10)"}</div>` + resto.map((v) => op(v, v.orden ? "Vía " + esc(v.orden.toLowerCase()) : "")).join("");
+      else if (cargando) html += '<div class="combo__vacio"><span class="girando" aria-hidden="true"></span> Cargando la red vial completa…</div>';
       else if (!cercaF.length) html += `<div class="combo__vacio">Ninguna vía de la red vial coincide con «${esc(texto)}». Puedes dejarlo escrito así.</div>`;
     }
     lista.innerHTML = html;
@@ -461,15 +470,33 @@
      corrige todo lo que se llenó solo (nunca lo que la persona escribió). Si las dos lecturas no coinciden,
      o la IA no está segura, se pide una segunda lectura «precisa» (la IA razona dígito por dígito). */
   let avisoPrimeraVez = true;
+  /* Consultas a Gemini EN FILA (máx. 2 a la vez) y con reintento automático si Gemini limita solicitudes (429).
+     Mandar muchas consultas juntas hace que Gemini las rechace y todo termina en el lector lento del navegador. */
+  const ColaIA = (() => {
+    let activos = 0; const espera = [];
+    const siguiente = () => { if (activos >= 2 || !espera.length) return; activos++; const t = espera.shift(); t().finally(() => { activos--; siguiente(); }); };
+    return (fn) => new Promise((ok) => { espera.push(() => Promise.resolve().then(fn).then(ok, () => ok(null))); siguiente(); });
+  })();
+  const pausa = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  async function postIA(accion, datos, sigue) {
+    let r = null;
+    for (let i = 0; i < 3; i++) {
+      r = await ColaIA(() => (sigue && !sigue() ? { status: "omitido" } : Api.post(accion, datos)));
+      if (!r || r.status === "success" || r.status === "omitido" || !r.reintentar) break;
+      await pausa(3000 * (i + 1) + Math.random() * 1000); // Gemini pidió esperar: se reintenta solo
+    }
+    if (r && r.status !== "success" && r.status !== "omitido") console.warn("[VIP-C IA]", accion, r.message);
+    return r || { status: "error", message: "sin respuesta" };
+  }
   const deIA = (s) => ({ fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS,
     tramo: LectorSello.corregirTramo(s.tramo || ""), codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion,
     seguridad: s.seguridad || "", preciso: !!s.preciso, legible: !!s.selloLegible });
   function pedirIA(r, preciso) {
     if (!HAY_BACKEND) return Promise.resolve(null);
     return Promise.race([
-      Api.post("leer", { base64: r.base64Lectura || r.base64, recorte: r.recorte || "", mimeType: "image/jpeg", preciso: !!preciso })
+      postIA("leer", { base64: r.base64Lectura || r.base64, recorte: r.recorte || "", mimeType: "image/jpeg", preciso: !!preciso })
         .then((s) => { if (s.status === "success") return deIA(s); r.errorIA = s.message || "sin respuesta"; return null; }).catch(() => null),
-      new Promise((ok) => setTimeout(() => ok(null), preciso ? 60000 : 30000)) // máximo 30 s (60 s en la lectura precisa)
+      new Promise((ok) => setTimeout(() => ok(null), preciso ? 70000 : 45000)) // máximo 45 s (70 s en la lectura precisa), con reintentos
     ]);
   }
   const editado = (r, k) => !!(r.editados && r.editados[k]);
@@ -750,10 +777,10 @@
     // Con el servidor: Gemini redacta el resumen de todo el acta y completa lo que falte
     if (!HAY_BACKEND) return;
     $("#p-ia").hidden = false;
-    const g = await Api.post("leerPdf", { base64: pdf.base64 });
+    const g = await postIA("leerPdf", { base64: pdf.base64 });
     $("#p-ia").hidden = true;
     if (pdfActual !== pdf) return;
-    if (g.status !== "success") { pdf.errorIA = g.message || "sin respuesta"; msgPdf(`Gemini no pudo leer el documento: ${pdf.errorIA}. Se usó el lector del navegador.`, true); return; }
+    if (g.status !== "success") { pdf.errorIA = g.message || "sin respuesta"; return; } // sigue con lo que leyó el navegador (el motivo queda en la consola)
     const habiaPuntos = d.puntos.length;
     d.fecha = d.fecha || g.fecha || ""; d.codigoVia = d.codigoVia || g.codigoVia || ""; d.via = d.via || g.via || ""; d.municipioTexto = g.municipio || "";
     if (g.resumen) d.resumen = g.resumen;
@@ -934,15 +961,17 @@
   }
 
   // Fotos del PDF: solo cuentan las que tienen sello con coordenadas (mapas, tablas y logos se ignoran).
-  // Gemini (recortes del sello, en grupos de 3 a la vez) y el lector del navegador trabajan al mismo tiempo;
-  // cada foto se aplica con el primer resultado confiable, y si Gemini lee distinto al lector, manda Gemini.
+  // Si el texto del PDF ya trae coordenadas y fecha de todos los tramos, NO se leen fotos (es lo más rápido).
+  // Si falta algo: primero Gemini (grupos de 6 fotos, en fila); el lector del navegador solo si Gemini no puede.
   async function leerFotosPdfInterno(pdf, d) {
+    const falta = () => pdfActual === pdf && tramosPdf.some((r) => !r.agregado && (!tieneCoord(r) || !r.fecha));
+    if (!falta()) return;
     let fotos = [];
     try { fotos = await LectorPDF.imagenes(pdf.doc, 60, 240); } catch (_) { return; }
-    if (!fotos.length || pdfActual !== pdf) return;
+    if (!fotos.length || !falta()) return;
     const aviso3 = (t) => { $("#p-fotos").hidden = !t; $("#p-fotos").textContent = t || ""; };
     const aplicado = {};            // índice de foto → { fuente, lat, lon, tramo }
-    let cola = Promise.resolve(), conCoord = 0, geminiOk = false, geminiFallo = false, geminiTerminado = !HAY_BACKEND;
+    let cola = Promise.resolve(), conCoord = 0, geminiOk = false, geminiFallo = false;
     const aplicar = (i, x, fuente) => {
       cola = cola.then(async () => {
         if (pdfActual !== pdf) return;
@@ -965,31 +994,32 @@
     };
     const prDe = (x) => LectorPDF.prDe("pr" + String(x || "").replace(/^\s*(pr|k|km)\.?\s*/i, ""));
 
-    // 1) Gemini con recortes del sello
-    const tGemini = !HAY_BACKEND ? Promise.resolve() : (async () => {
-      try {
-        const recortes = await Promise.all(fotos.map((f) => recorteSello(f.dataUrl)));
-        const grupos = []; for (let i = 0; i < recortes.length; i += 3) grupos.push(i);
-        await Promise.all(grupos.map(async (ini) => {
-          const g = await Api.post("leerFotos", { imagenes: recortes.slice(ini, ini + 3) });
-          if (g.status !== "success" || !Array.isArray(g.fotos)) { geminiFallo = true; pdf.errorIA = pdf.errorIA || g.message || "sin respuesta"; return; }
-          geminiOk = true;
-          for (const x of g.fotos) {
-            const i = ini + Number(x.indice);
-            if (fotos[i] && x.legible && x.esFoto !== false) await aplicar(i, { lat: x.latitud, lon: x.longitud, fecha: x.fecha, pr: prDe(x.pr), via: LectorSello.corregirTramo(x.tramo || "") }, "gemini");
-          }
-        }));
-      } catch (_) { geminiFallo = true; }
-      geminiTerminado = true;
-    })();
+    // 1) Gemini con recortes del sello: grupos de 6, en fila (la cola deja máx. 2 consultas a la vez)
+    if (HAY_BACKEND) {
+      aviso3(`· Leyendo las ${fotos.length} fotos del PDF con IA…`);
+      const grupos = []; for (let i = 0; i < fotos.length; i += 6) grupos.push(i);
+      let listos = 0;
+      await Promise.all(grupos.map(async (ini) => {
+        const recortes = await Promise.all(fotos.slice(ini, ini + 6).map((f) => recorteSello(f.dataUrl).catch(() => "")));
+        const g = await postIA("leerFotos", { imagenes: recortes.filter(Boolean) }, falta);
+        if (g.status === "omitido") return;
+        if (g.status !== "success" || !Array.isArray(g.fotos)) { geminiFallo = true; pdf.errorIA = pdf.errorIA || g.message || "sin respuesta"; return; }
+        geminiOk = true; listos += recortes.length;
+        if (falta()) aviso3(`· Leyendo las fotos del PDF con IA (${Math.min(listos, fotos.length)} de ${fotos.length})…`);
+        for (const x of g.fotos) {
+          const i = ini + Number(x.indice);
+          if (fotos[i] && x.legible && x.esFoto !== false) await aplicar(i, { lat: x.latitud, lon: x.longitud, fecha: x.fecha, pr: prDe(x.pr), via: LectorSello.corregirTramo(x.tramo || "") }, "gemini");
+        }
+      }));
+    }
 
     // 2) Lector del navegador, foto por foto (rápido con el sello estándar)
     const lecturas = []; // lecturas del navegador que esperan confirmación
+    // 2) Lector del navegador (respaldo): sin servidor, o si Gemini no pudo; se detiene apenas no falte nada
     const tLector = (async () => {
+      if (HAY_BACKEND && geminiOk && !geminiFallo) return;
       for (let i = 0; i < fotos.length; i++) {
-        if (pdfActual !== pdf) return;
-        // Si Gemini ya terminó y todos los tramos tienen coordenadas, no hace falta seguir leyendo
-        if (geminiTerminado && geminiOk && tramosPdf.every((r) => (tieneCoord(r) && r.fecha) || r.agregado)) break;
+        if (!falta()) break;
         if (aplicado[i]) continue;
         aviso3(`· Leyendo las imágenes del PDF (${i + 1} de ${fotos.length})…`);
         let o = null;
@@ -1011,16 +1041,16 @@
       }
     })();
 
-    await Promise.all([tGemini, tLector]);
+    await tLector;
     await cola;
     aviso3("");
     if (pdfActual !== pdf) return;
     const sinCoord = tramosPdf.filter((r) => !tieneCoord(r) && !r.agregado).length;
     const sinFecha = tramosPdf.filter((r) => !r.fecha && !r.agregado).length;
-    msgPdf(`Imágenes del PDF: ${fotos.length} revisadas, ${conCoord} con sello y coordenadas` +
-      (sinCoord ? `. ${sinCoord} tramo(s) siguen sin coordenadas: complétalas a mano.` : ". Todos los tramos tienen coordenadas.") +
-      (sinFecha ? ` ${sinFecha} sin fecha: complétala a mano.` : "") +
-      (HAY_BACKEND && geminiFallo && !geminiOk ? ` (Gemini no respondió${pdf.errorIA ? ": " + pdf.errorIA : ""}. Se usó solo el lector del navegador.)` : ""), sinCoord > 0 || sinFecha > 0 || (HAY_BACKEND && geminiFallo && !geminiOk));
+    void conCoord;
+    msgPdf(sinCoord || sinFecha
+      ? [sinCoord && `${sinCoord} tramo(s) sin coordenadas`, sinFecha && `${sinFecha} sin fecha`].filter(Boolean).join(" y ") + ": complétalos a mano y toca «Agregar a la lista»."
+      : `Listo: los ${tramosPdf.length} tramos tienen fecha y coordenadas. Revisa los datos y toca «Agregar a la lista».`, !!(sinCoord || sinFecha));
   }
   pintarPdf();
 
@@ -1040,8 +1070,8 @@
       <div class="card__cuerpo">
         <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
-        ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}">${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
-          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: HAY_BACKEND ? "Leído con el lector del navegador (la IA no respondió" + (r.errorIA ? ": " + esc(r.errorIA) : "") + ")" : "Leído con el lector del navegador" }[r.leidoPor] || ""}</div>` : ""}
+        ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}"${r.errorIA ? ` title="IA: ${esc(r.errorIA)}"` : ""}>${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
+          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: "Leído con el lector del navegador" }[r.leidoPor] || ""}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">

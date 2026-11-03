@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.5.1", gemini: !!prop_("GEMINI_API_KEY", true) });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.5.2", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -801,12 +801,22 @@ function validarSesion_(token) {
 
 // Llamada rápida a Gemini: sin «razonamiento» extra (responde mucho más rápido para leer sellos).
 // Si el modelo no acepta esa opción, se repite la llamada sin ella.
+// Llamada a Gemini con reintento: si responde 429 (límite por minuto) o 503 (ocupado), espera y vuelve a intentar
+function fetchGemini_(url, key, body) {
+  let res;
+  for (let i = 0; i < 3; i++) {
+    res = UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key }, payload: JSON.stringify(body) });
+    const c = res.getResponseCode();
+    if (c !== 429 && c !== 503) return res;
+    if (i < 2) Utilities.sleep(2500 * (i + 1) + Math.floor(Math.random() * 800));
+  }
+  return res;
+}
+
 function geminiRapido_(key, modelo, body, preciso) {
   if (preciso) modelo = prop_("GEMINI_MODEL_PRECISO", true) || modelo;
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
-  const enviar = function (b) {
-    return UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key }, payload: JSON.stringify(b) });
-  };
+  const enviar = function (b) { return fetchGemini_(url, key, b); };
   // Modo preciso: el modelo razona antes de responder (más lento, pero revisa dígito por dígito)
   if (preciso) return enviar(body);
   const rapido = JSON.parse(JSON.stringify(body));
@@ -964,10 +974,7 @@ function leerPdf_(payload) {
     generationConfig: { responseMimeType: "application/json", temperature: 0 }
   };
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
-  const res = UrlFetchApp.fetch(url, {
-    method: "post", contentType: "application/json", muteHttpExceptions: true,
-    headers: { "x-goog-api-key": key }, payload: JSON.stringify(body)
-  });
+  const res = fetchGemini_(url, key, body);
   const code = res.getResponseCode();
   if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };

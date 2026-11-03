@@ -358,7 +358,10 @@ const LectorPDF = (function () {
     const hallazgo = fs.find((f) => /se\s+(evidenci|identific|observ)/i.test(f));
     const medidas = fs.filter((f) => /se\s+estima|longitud|ancho\s+efectivo|altura/i.test(f) && f !== hallazgo).slice(0, 2);
     const rec = fs.find((f) => /se\s+recomienda|se\s+requiere/i.test(f));
-    const h = hallazgo ? hallazgo.replace(/^.*?(se\s+(evidenci|identific|observ))/i, (m, a) => a.charAt(0).toUpperCase() + a.slice(1)) : "";
+    let h = hallazgo ? hallazgo.replace(/^.*?(se\s+(evidenci|identific|observ))/i, (m, a) => a.charAt(0).toUpperCase() + a.slice(1)) : "";
+    // Frases sin punto final (líneas sueltas): que la recomendación no quede repetida dentro del hallazgo
+    const iRec = rec ? h.search(/\s+se\s+(recomienda|requiere)/i) : -1;
+    if (iRec > 20) h = h.slice(0, iRec).trim();
     const partes = [[h && corta(h, 320), ...medidas.map((m) => corta(m, 220))].filter(Boolean).join(" ")];
     if (rec) partes.push("Recomendación: " + corta(rec.slice(Math.max(0, rec.search(/se\s+recomienda|se\s+requiere/i))), 320));
     const t = partes.filter(Boolean).join("\n");
