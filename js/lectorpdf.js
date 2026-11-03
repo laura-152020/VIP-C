@@ -343,6 +343,7 @@ const LectorPDF = (function () {
     if (!puntos.length) secciones(texto, fin, paginaDe, general).forEach((x) => puntos.push(x));
     const r = Object.assign(general, { puntos, texto: plano });
     r.resumen = resumir(r);
+    puntos.forEach((p) => { p.resumen = p.deTabla ? "" : resumenDePunto(p); });
     return r;
   }
 
@@ -351,6 +352,18 @@ const LectorPDF = (function () {
      y las recomendaciones. Con el servidor conectado, Gemini lo reemplaza por uno redactado. */
   function frases(t) { return String(t || "").replace(/\s+/g, " ").split(/(?<=[.;])\s+(?=[A-ZÁÉÍÓÚÑ])/).map((x) => x.trim()).filter(Boolean); }
   const corta = (t, n) => (t.length > n ? t.slice(0, n).replace(/\s+\S*$/, "") + "…" : t);
+  // Resumen de UN punto (para sus Observaciones): lo encontrado, las medidas y lo recomendado en ese sitio
+  function resumenDePunto(p) {
+    const fs = frases(p.descripcion).filter((f) => !/^(tramo|punto|sitio|pk)\s*\d+\s*[.:]/i.test(f) || /se\s+(evidenci|identific|observ)/i.test(f));
+    const hallazgo = fs.find((f) => /se\s+(evidenci|identific|observ)/i.test(f));
+    const medidas = fs.filter((f) => /se\s+estima|longitud|ancho\s+efectivo|altura/i.test(f) && f !== hallazgo).slice(0, 2);
+    const rec = fs.find((f) => /se\s+recomienda|se\s+requiere/i.test(f));
+    const h = hallazgo ? hallazgo.replace(/^.*?(se\s+(evidenci|identific|observ))/i, (m, a) => a.charAt(0).toUpperCase() + a.slice(1)) : "";
+    const partes = [[h && corta(h, 320), ...medidas.map((m) => corta(m, 220))].filter(Boolean).join(" ")];
+    if (rec) partes.push("Recomendación: " + corta(rec.slice(Math.max(0, rec.search(/se\s+recomienda|se\s+requiere/i))), 320));
+    const t = partes.filter(Boolean).join("\n");
+    return t ? (p.nombre ? p.nombre + ": " : "") + t : "";
+  }
   function resumir(d) {
     const partes = [];
     const motivo = frases(d.texto).find((f) => /se\s+realiz[oó]\s+(?:una\s+)?visita|tuvo\s+como\s+objeto|se\s+llev[oó]\s+a\s+cabo\s+una\s+(?:inspecci|visita)/i.test(f));
@@ -408,6 +421,6 @@ const LectorPDF = (function () {
     return out;
   }
 
-  return { cargarLib, abrir, dibujarPagina, imagenes, interpretar, tipoDe, resumir, prDe };
+  return { cargarLib, abrir, dibujarPagina, imagenes, interpretar, tipoDe, resumir, resumenDePunto, prDe };
 })();
 if (typeof module !== "undefined") module.exports = LectorPDF;

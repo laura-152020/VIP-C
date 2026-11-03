@@ -468,7 +468,7 @@
     if (!HAY_BACKEND) return Promise.resolve(null);
     return Promise.race([
       Api.post("leer", { base64: r.base64Lectura || r.base64, recorte: r.recorte || "", mimeType: "image/jpeg", preciso: !!preciso })
-        .then((s) => (s.status === "success" ? deIA(s) : null)).catch(() => null),
+        .then((s) => { if (s.status === "success") return deIA(s); r.errorIA = s.message || "sin respuesta"; return null; }).catch(() => null),
       new Promise((ok) => setTimeout(() => ok(null), preciso ? 60000 : 30000)) // máximo 30 s (60 s en la lectura precisa)
     ]);
   }
@@ -535,7 +535,7 @@
   }
 
   async function leer(r) {
-    r.estado = "leyendo"; r.confirmandoIA = false; r.leidoPor = ""; actualizar(r);
+    r.estado = "leyendo"; r.confirmandoIA = false; r.leidoPor = ""; r.errorIA = ""; actualizar(r);
     const preciso = !!r.releerPreciso; r.releerPreciso = false; // «Volver a leer la foto» va directo a la lectura precisa
     let error = "";
     const completo = (x) => !!(x && x.fecha && x.latitud != null && !x.coordDudosa);
@@ -752,13 +752,20 @@
     $("#p-ia").hidden = false;
     const g = await Api.post("leerPdf", { base64: pdf.base64 });
     $("#p-ia").hidden = true;
-    if (pdfActual !== pdf || g.status !== "success") return;
+    if (pdfActual !== pdf) return;
+    if (g.status !== "success") { pdf.errorIA = g.message || "sin respuesta"; msgPdf(`Gemini no pudo leer el documento: ${pdf.errorIA}. Se usó el lector del navegador.`, true); return; }
     const habiaPuntos = d.puntos.length;
     d.fecha = d.fecha || g.fecha || ""; d.codigoVia = d.codigoVia || g.codigoVia || ""; d.via = d.via || g.via || ""; d.municipioTexto = g.municipio || "";
-    const resumenAnterior = d.resumen;
     if (g.resumen) d.resumen = g.resumen;
+    const gPuntos = (Array.isArray(g.puntos) ? g.puntos : []).map((p) => Object.assign({}, p, { lat: p.latitud, lon: p.longitud, prN: LectorPDF.prDe("pr" + String(p.pr || "").replace(/^\s*(pr|k|km)\.?\s*/i, "")) }));
+    const suyo = (r) => gPuntos.find((p) => p.lat != null && tieneCoord(r) && distanciaM({ lat: r.latitud, lon: r.longitud }, p) < 80)
+      || gPuntos.find((p) => p.prN && r.pr && p.prN === r.pr) || gPuntos.find((p) => p.nombre && r.punto && norm(p.nombre) === norm(r.punto));
     tramosPdf.forEach((r) => {
-      if (!r.agregado && (!r.observaciones || r.observaciones === resumenAnterior)) r.observaciones = d.resumen;
+      if (!r.agregado && r.obsAuto && !editado(r, "observaciones")) {
+        const p = tramosPdf.length > 1 ? suyo(r) : null;
+        if (p && p.descripcion) r.observaciones = (r.punto ? r.punto + ": " : "") + p.descripcion;
+        else if (tramosPdf.length === 1 && d.resumen) r.observaciones = d.resumen;
+      }
       if (!r.fecha) r.fecha = d.fecha; if (!r.codigoVia) r.codigoVia = d.codigoVia; if (!r.nombreTramo && d.via) { r.nombreTramo = d.via; r.tramoDe = "gem"; }
     });
     // Gemini entiende cualquier formato de PDF: sus sitios que no estén ya en la lista se agregan.
@@ -776,6 +783,15 @@
     if (g.resumen) msgPdf("Gemini leyó el documento completo (texto y fotos). Revisa los datos y toca «Agregar a la lista».");
   }
 
+  // Observaciones de un tramo: si el documento describe varios sitios, cada uno lleva SOLO lo suyo
+  // (hallazgo, medidas y recomendación); el resumen de todo el documento queda para actas de un solo sitio.
+  const corto = (t, n) => (t.length > n ? t.slice(0, n).replace(/\s+\S*$/, "") + "…" : t);
+  function obsDePunto(d, p) {
+    const varios = (d.puntos || []).length > 1 || tramosPdf.length > 1;
+    if (!varios) return d.resumen || p.resumen || p.descripcion || "";
+    if (p.deGemini && p.descripcion) return (p.nombre ? p.nombre + ": " : "") + p.descripcion;
+    return p.resumen || corto(String(p.descripcion || ""), 900);
+  }
   const imagenesPagina = new WeakMap(); // por PDF: página → imagen dibujada
   async function crearTramo(pdf, d, p) {
     const enTexto = municipiosDelTexto(d.texto);
@@ -793,7 +809,7 @@
       fecha: p.fecha || d.fecha || "", fechaTexto: d.fechaTexto || "", codigoVia: p.codigoVia || d.codigoVia || "", nombreTramo: p.via || d.via || "",
       tramoDe: p.via || d.via ? "pdf" : "",
       tipoAfectacion: "", responsable: "",
-      observaciones: (p.pr || p.deGemini) && p.descripcion ? p.descripcion : (d.resumen || p.descripcion || ""), // sitio con su propio texto
+      observaciones: obsDePunto(d, p), obsAuto: true,
       pr: p.pr || ""
     });
     // Municipio escrito en la fila del punto: lo dice el documento, no se cambia solo
@@ -956,7 +972,7 @@
         const grupos = []; for (let i = 0; i < recortes.length; i += 3) grupos.push(i);
         await Promise.all(grupos.map(async (ini) => {
           const g = await Api.post("leerFotos", { imagenes: recortes.slice(ini, ini + 3) });
-          if (g.status !== "success" || !Array.isArray(g.fotos)) { geminiFallo = true; return; }
+          if (g.status !== "success" || !Array.isArray(g.fotos)) { geminiFallo = true; pdf.errorIA = pdf.errorIA || g.message || "sin respuesta"; return; }
           geminiOk = true;
           for (const x of g.fotos) {
             const i = ini + Number(x.indice);
@@ -1004,7 +1020,7 @@
     msgPdf(`Imágenes del PDF: ${fotos.length} revisadas, ${conCoord} con sello y coordenadas` +
       (sinCoord ? `. ${sinCoord} tramo(s) siguen sin coordenadas: complétalas a mano.` : ". Todos los tramos tienen coordenadas.") +
       (sinFecha ? ` ${sinFecha} sin fecha: complétala a mano.` : "") +
-      (HAY_BACKEND && geminiFallo && !geminiOk ? " (Gemini no respondió: se usó solo el lector del navegador.)" : ""), sinCoord > 0 || sinFecha > 0);
+      (HAY_BACKEND && geminiFallo && !geminiOk ? ` (Gemini no respondió${pdf.errorIA ? ": " + pdf.errorIA : ""}. Se usó solo el lector del navegador.)` : ""), sinCoord > 0 || sinFecha > 0 || (HAY_BACKEND && geminiFallo && !geminiOk));
   }
   pintarPdf();
 
@@ -1025,7 +1041,7 @@
         <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}">${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
-          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: HAY_BACKEND ? "Leído con el lector del navegador (la IA no respondió)" : "Leído con el lector del navegador" }[r.leidoPor] || ""}</div>` : ""}
+          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: HAY_BACKEND ? "Leído con el lector del navegador (la IA no respondió" + (r.errorIA ? ": " + esc(r.errorIA) : "") + ")" : "Leído con el lector del navegador" }[r.leidoPor] || ""}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">

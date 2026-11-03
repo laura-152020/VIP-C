@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.5.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.5.1", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -861,7 +861,7 @@ function leerSello_(payload) {
   const res = geminiRapido_(key, modelo, body, !!payload.preciso);
   const code = res.getResponseCode();
   if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
-  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + res.getContentText().slice(0, 200) };
+  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };
 
   const d = jsonGemini_(res);
   if (!d) return { status: "error", message: "No se pudo interpretar la respuesta de Gemini." };
@@ -890,6 +890,12 @@ function leerSello_(payload) {
     selloLegible: !!d.sello_legible && lat !== null && lon !== null && !fuera,
     fueraDeAntioquia: fuera
   };
+}
+
+// Mensaje corto del error que devuelve Gemini (ej. modelo inexistente, clave inválida, cuota agotada)
+function errorGemini_(res) {
+  try { const e = JSON.parse(res.getContentText()).error; if (e && e.message) return String(e.message).slice(0, 180); } catch (_) {}
+  return res.getContentText().slice(0, 180);
 }
 
 // Texto JSON de la respuesta de Gemini (con o sin ```json)
@@ -964,7 +970,7 @@ function leerPdf_(payload) {
   });
   const code = res.getResponseCode();
   if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
-  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + res.getContentText().slice(0, 200) };
+  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };
   const r = JSON.parse(res.getContentText());
   const texto = r && r.candidates && r.candidates[0] && r.candidates[0].content &&
     r.candidates[0].content.parts && r.candidates[0].content.parts[0] && r.candidates[0].content.parts[0].text;
@@ -1017,7 +1023,8 @@ function leerFotos_(payload) {
   imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
   const res = geminiRapido_(key, modelo, { contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } });
   const code = res.getResponseCode();
-  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + "." };
+  if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes (cuota). Intenta en un minuto." };
+  if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };
   const r = JSON.parse(res.getContentText());
   const texto = r && r.candidates && r.candidates[0] && r.candidates[0].content && r.candidates[0].content.parts && r.candidates[0].content.parts[0] && r.candidates[0].content.parts[0].text;
   let d;
@@ -1588,6 +1595,30 @@ function desbloquearUsuario() {
   const r = buscarUsuario_(USUARIO);
   if (r) { CacheService.getScriptCache().remove("fallos_" + normUsuario_(r.usuario)); CacheService.getScriptCache().remove("fallos_" + normUsuario_(r.nombre)); }
   Logger.log("Desbloqueado: " + USUARIO);
+}
+
+/* ======================= Prueba de Gemini ======================= */
+/** Ejecútala desde el editor (Ejecutar → probarGemini) si la página dice «Gemini no respondió».
+ *  Muestra en el registro qué modelo se usa y la respuesta exacta de Gemini. */
+function probarGemini() {
+  const key = prop_("GEMINI_API_KEY", true);
+  if (!key) { Logger.log("Falta la propiedad GEMINI_API_KEY (Configuración del proyecto → Propiedades del script)."); return; }
+  const modelos = [prop_("GEMINI_MODEL", true) || "gemini-3.8-flash"];
+  if (prop_("GEMINI_MODEL_PRECISO", true)) modelos.push(prop_("GEMINI_MODEL_PRECISO", true));
+  modelos.forEach(function (modelo) {
+    const body = { contents: [{ parts: [{ text: "Responde solo este JSON: {\"ok\":true}" }] }], generationConfig: { responseMimeType: "application/json", temperature: 0 } };
+    const t0 = Date.now();
+    const res = geminiRapido_(key, modelo, body);
+    const code = res.getResponseCode();
+    Logger.log("Modelo «" + modelo + "» → " + code + " en " + (Date.now() - t0) + " ms · " + (code === 200 ? "FUNCIONA" : errorGemini_(res)));
+  });
+  // Modelos disponibles para esta clave (para escoger uno si el configurado no existe)
+  try {
+    const l = JSON.parse(UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: { "x-goog-api-key": key }, muteHttpExceptions: true }).getContentText());
+    const nombres = (l.models || []).filter(function (m) { return (m.supportedGenerationMethods || []).indexOf("generateContent") >= 0; })
+      .map(function (m) { return String(m.name).replace("models/", ""); }).filter(function (n) { return /flash|pro/.test(n); });
+    Logger.log("Modelos disponibles: " + (nombres.join(", ") || JSON.stringify(l).slice(0, 200)));
+  } catch (e) { Logger.log("No se pudo listar los modelos: " + e.message); }
 }
 
 /* ======================= Prueba manual ======================= */
