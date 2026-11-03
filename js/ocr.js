@@ -272,7 +272,7 @@ const LectorSello = (function () {
     }
     if (cadena) return { tramo: cadena, codigo };
     // Respaldo: última línea con palabras (ej. "Grada el peñol"), sin fechas, coordenadas ni el logo
-    const RUIDO = /secretar|infraestructura|emergencia|gobernaci|trabajamos|rentan|vial(es)?$/i;
+    const RUIDO = /secretar|infraestructura|emergencia|gobernaci|trabajamos|rentan|vial(es)?$|^\W*(antioquia|colombia)\W*$/i;
     for (let i = lineas.length - 1; i >= 0; i--) {
       const l = lineas[i];
       if (/\d/.test(l) || RUIDO.test(l)) continue;
@@ -341,6 +341,8 @@ const LectorSello = (function () {
     }).join(" - ");
   }
 
+  // Línea que solo dice el departamento o el país (sellos de apps de cámara): «Antioquia» · «Antioquia, Colombia» · «Colombia»
+  const ES_REGION = /^\W*(?:(?:departamento\s+de\s+)?antioquia|colombia)(?:[\s,.\-–]+(?:antioquia|colombia))*\W*$/i;
   // En el formato de sello estándar, el tramo es la línea que va debajo de las coordenadas (puede ser una sola palabra, ej. «Remedios»)
   function tramoBajoCoordenadas(texto) {
     const lineas = normalizar(texto).split("\n").map((l) => l.trim()).filter(Boolean);
@@ -349,8 +351,9 @@ const LectorSello = (function () {
     k = lineas.findIndex((l) => !!buscarCoordenadas(l)); // la primera línea donde se leen coordenadas completas
     if (k < 0 || k + 1 >= lineas.length) return "";
     if (/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(lineas[k + 1])) return ""; // es la fecha, no el tramo
-    // El tramo puede ocupar varias líneas (ej. «60AN16-1 - Granada - El Chocó - San» / «Carlos» / «PR 18+200»)
-    let t = lineas.slice(k + 1, k + 4).filter((l) => !/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(l)).join(" ");
+    // El tramo puede ocupar varias líneas (ej. «60AN16-1 - Granada - El Chocó - San» / «Carlos» / «PR 18+200»).
+    // Algunas cámaras ponen primero el departamento o el país (ej. «Antioquia» / «Caicedo - Urrao»): esa línea no es el tramo.
+    let t = lineas.slice(k + 1, k + 5).filter((l) => !/\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}|\d{1,2}:\d{2}/.test(l) && !ES_REGION.test(l)).slice(0, 3).join(" ");
     t = t.replace(/\b(?:pr|k|km|abs(?:cisa)?)\s*\.?\s*\d{1,3}\s*\+\s*\d{1,3}\b.*$/i, "")   // abscisa PR y lo que siga
       .replace(new RegExp(RE_CODIGO.source, "i"), " ")                                      // código de la vía (va en su propia casilla)
       .replace(/^[\s\-–—]+/, "");

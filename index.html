@@ -8,7 +8,7 @@
   <!-- Seguridad: solo se cargan scripts y conexiones de estos orígenes -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' blob:; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://services5.arcgis.com https://cdn.jsdelivr.net data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=8.7">
+  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=8.8">
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#283517">
   <link rel="apple-touch-icon" href="img/app/apple-touch-icon.png">
@@ -16,12 +16,12 @@
   <meta name="apple-mobile-web-app-title" content="VIP-C">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/style.css?v=8.7">
+  <link rel="stylesheet" href="css/style.css?v=8.8">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar__in">
-      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=8.7" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
+      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=8.8" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
       <div class="marca">
         <div class="marca__sigla">VIP-C</div>
         <div class="marca__nombre">Visor interactivo de puntos críticos</div>
@@ -186,7 +186,34 @@
       </div>
       <div id="tarjetas" class="tarjetas"></div>
     </section>
+
+    <!-- 4. PUNTOS GUARDADOS · ELIMINAR EN ARCGIS -->
+    <section class="panel" id="guardados" aria-labelledby="h-guardados">
+      <div class="panel__head">
+        <h2 id="h-guardados"><span class="num">4</span> Puntos guardados · eliminar en ArcGIS</h2>
+        <span class="hint">Tus puntos (los administradores ven todos)</span>
+      </div>
+      <form class="buscar-g" id="g-form" role="search">
+        <input id="g-buscar" type="search" placeholder="Buscar por ID, municipio, tramo, código o FID de ArcGIS" autocomplete="off" aria-label="Buscar puntos guardados">
+        <button type="submit" class="btn" id="g-cargar">Ver puntos guardados</button>
+      </form>
+      <p id="g-msg" class="hint" role="status"></p>
+      <div id="g-lista" class="guardados"></div>
+    </section>
   </main>
+
+  <dialog id="dlg-eliminar" class="dialogo" aria-labelledby="de-titulo">
+    <form method="dialog" class="dialogo__caja" id="de-form">
+      <h2 id="de-titulo">Eliminar el punto en ArcGIS</h2>
+      <p id="de-texto"></p>
+      <label for="de-motivo"><span>Motivo <em>*</em></span><textarea id="de-motivo" rows="3" placeholder="Ej. punto duplicado, coordenadas equivocadas…"></textarea></label>
+      <p class="acceso__msg" id="de-msg" role="alert"></p>
+      <div class="actions">
+        <button type="button" class="btn btn--ghost" id="de-cancelar">Cancelar</button>
+        <button type="submit" class="btn btn--peligro" id="de-confirmar" value="si">Eliminar de ArcGIS</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="visor-pdf" class="visor visor--pdf" aria-label="PDF completo">
     <div class="visor__bar"><span id="vp-nombre"></span><button type="button" id="vp-cerrar">Cerrar</button></div>
@@ -212,13 +239,13 @@
 
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js" integrity="sha384-KRanV2NRwHPanp7iM6nlLQC5jPCTscSYMko30dLJHzNXJaUNtcucWv+SOi3jV3PE" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js" integrity="sha384-r1ru3tcf6FhnCFR4B7pIFG+BhFF9LlFtz/P1y4pblWn3AGs9y3lBx5SKLNf4+rED" crossorigin="anonymous"></script>
-  <script src="js/proteccion.js?v=8.7"></script>
-  <script src="js/app-instalable.js?v=8.7"></script>
-  <script src="js/config.js?v=8.7"></script>
-  <script src="js/municipios.js?v=8.7"></script>
-  <script src="js/ocr.js?v=8.7"></script>
-  <script src="js/lectorpdf.js?v=8.7"></script>
-  <script src="js/capas.js?v=8.7"></script>
-  <script src="js/app.js?v=8.7"></script>
+  <script src="js/proteccion.js?v=8.8"></script>
+  <script src="js/app-instalable.js?v=8.8"></script>
+  <script src="js/config.js?v=8.8"></script>
+  <script src="js/municipios.js?v=8.8"></script>
+  <script src="js/ocr.js?v=8.8"></script>
+  <script src="js/lectorpdf.js?v=8.8"></script>
+  <script src="js/capas.js?v=8.8"></script>
+  <script src="js/app.js?v=8.8"></script>
 </body>
 </html>

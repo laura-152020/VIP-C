@@ -40,7 +40,7 @@ backend/appsscript.json          Manifiesto del Apps Script
 | Fecha de la visita * | Del sello de la foto. Si no hay, del GPS interno o a mano |
 | Latitud / Longitud | Del sello (`6°10'42"N 75°9'57"W` o `+6,1694N -75,1630W`), del GPS de la foto, de «Usar mi ubicación actual» o a mano |
 | Código oficial de la vía | A mano (se lee del sello si aparece, ej. `60AN17`) |
-| Nombre del tramo | Del sello («Vía Granada - Guatapé» → `Granada - Guatapé`; si no dice «Vía», la última línea, ej. `Grada el peñol`) o a mano |
+| Nombre del tramo | Del sello («Vía Granada - Guatapé» → `Granada - Guatapé`; las líneas «Antioquia» o «Colombia» se ignoran), de la fila del PDF o de la **lista desplegable (▾)**: arriba las vías cercanas al punto y abajo toda la red vial, con búsqueda por palabras. Al elegir se llenan el código y el nombre |
 | Subregión | Automática a partir del municipio |
 | Municipio * | Automático: por coordenadas; si la foto no trae coordenadas, por el nombre escrito en el sello (ej. «Grada el peñol» → El Peñol) |
 | Tipo de afectación * | Lista desplegable. Con el backend conectado, Gemini lo sugiere mirando la foto |
@@ -151,7 +151,7 @@ El código lee los campos de la capa antes de enviar: si la capa cambia, solo ma
 - Si ArcGIS falla, el registro queda guardado en Sheets como pendiente. Ejecuta `reenviarArcgis` en el editor para reenviar todos los pendientes.
 - `probarArcgis` revisa la conexión con la capa sin crear nada.
 - Si la capa no es editable en público, agrega las propiedades `ARCGIS_USUARIO` y `ARCGIS_CLAVE` (una cuenta de ArcGIS Online con permiso de edición). `ARCGIS_URL` permite cambiar de capa.
-- Anular un registro en VIP-C no lo borra de ArcGIS.
+- Anular un registro en VIP-C no lo borra de ArcGIS. Para borrarlo de ArcGIS se usa la sección **4. Puntos guardados** (ver abajo).
 - Exportar todo: `URL_EXEC?accion=listar&formato=csv&admin=TU_ADMIN_TOKEN` (o `formato=geojson`).
 
 ## Capas de referencia (solo lectura)
@@ -205,3 +205,29 @@ El botón «Instalar software» descarga `VIP-C-Instalador.exe` desde la misma p
 públicos: el archivo está en partes de 20 MB (Cloudflare acepta hasta 25 MB por archivo), el navegador las une y
 comprueba la huella SHA-256. Para publicar un instalador nuevo: `cd escritorio && npm run instalador && node publicar-instalador.js`
 y luego `git push`.
+
+## Lectura con IA, tramos y eliminación en ArcGIS (v8.8 · Apps Script 7.5.0)
+
+**Lectura de fotos.** Gemini es el lector principal: recibe la foto completa y una ampliación de la franja inferior
+(donde va el sello). El lector del navegador muestra un resultado rápido y, cuando llega Gemini, se corrige todo lo que
+se llenó solo (nunca lo que la persona escribió). Si las dos lecturas no coinciden (más de 100 m o fechas distintas), o si
+Gemini no está segura, se pide una **lectura precisa** (Gemini razona dígito por dígito). «Volver a leer la foto» usa
+siempre la lectura precisa. La tarjeta dice «Leído con IA» o «Revisado con IA». Propiedad opcional `GEMINI_MODEL_PRECISO`
+para usar otro modelo en esa relectura. Sellos reconocidos: `6° 38' 21" N, 74° 53' 24" W`, `N 6° 22' 10" W 75° 42' 28"`
+y `6.40101N 76.04736W` (con la línea «Antioquia» antes del tramo).
+
+**Registros fotográficos en tabla** (ej. «Anexo A. Registro fotográfico de pérdidas de banca»: Municipio | Punto | Vía |
+Abscisa | Latitud | Longitud): cada fila es un punto con su propio municipio, nombre y código de la vía, abscisa y
+coordenadas (también `6.4010N 76.0473W` o `75.8910` sin la W). La fecha se toma del sello de la foto de cada punto.
+Se leen hasta 60 fotos por PDF.
+
+**4. Puntos guardados · eliminar en ArcGIS.** Lista los puntos guardados (los 150 más recientes, con búsqueda por ID,
+municipio, tramo, código o FID). **Eliminar** pide un motivo y:
+1. guarda una copia completa del punto (atributos y ubicación) en la hoja **Eliminados** del Sheet;
+2. lo borra de la capa de ArcGIS (`deleteFeatures`);
+3. marca el registro como `ELIMINADO` en `Registro_VIPC` (fecha, motivo y quién) y manda la foto a la papelera de Drive.
+
+Quién puede: las personas con **Rol = admin** en la hoja `Usuarios` eliminan cualquier punto; las demás, solo los que
+registraron. Si ArcGIS responde que no se puede borrar, la capa necesita la operación «Eliminar» activa o las propiedades
+`ARCGIS_USUARIO` y `ARCGIS_CLAVE` de una cuenta con permiso de edición. Para recuperar un punto: en el editor del Apps
+Script, cambia `ID_O_FID` en `restaurarPuntoEliminado` y ejecútala (crea el punto de nuevo con su foto).

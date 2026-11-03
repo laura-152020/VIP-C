@@ -1,5 +1,5 @@
 /**
- * VIP-C · Visor interactivo de puntos críticos — Backend v4.9 (Google Apps Script)
+ * VIP-C · Visor interactivo de puntos críticos — Backend v7.5 (Google Apps Script)
  * ----------------------------------------------------------
  * Un solo archivo. Guarda fotos en Drive, lee el sello de la foto con Gemini
  * y registra cada punto (con o sin foto) en Google Sheets. Expone los datos para ArcGIS.
@@ -7,6 +7,7 @@
  * PROPIEDADES DEL SCRIPT (Configuración del proyecto → Propiedades del script):
  *   GEMINI_API_KEY   Clave de Google AI Studio (https://aistudio.google.com/apikey)
  *   GEMINI_MODEL     Opcional. Por defecto: gemini-3.8-flash
+ *   GEMINI_MODEL_PRECISO Opcional. Modelo para la relectura precisa de un sello dudoso (por defecto, el mismo GEMINI_MODEL con razonamiento)
  *   ROOT_FOLDER_ID   ID de la carpeta raíz en Drive donde se guardan las fotos
  *   SPREADSHEET_ID   ID del Google Sheet que funciona como base de datos
  *   APP_TOKEN        Opcional. Clave compartida con la página (la misma de config.js)
@@ -43,6 +44,8 @@
  *   POST {accion:"leer",  sesion, base64, mimeType}           → datos del sello (no guarda nada)
  *   POST {accion:"subir", sesion, base64?, ...campos}         → guarda en Drive (si hay foto) + Sheets
  *   POST {accion:"anular", sesion, adminToken, id, motivo}    → marca el registro ANULADO y manda la foto a la papelera
+ *   POST {accion:"puntos", sesion, buscar?}                   → puntos guardados (administradores: todos; los demás: los suyos)
+ *   POST {accion:"eliminar", sesion, id | fid, motivo}        → borra el punto de ArcGIS (con copia en la hoja «Eliminados») y marca el registro ELIMINADO
  *   GET  ?accion=listar&admin=ADMIN_TOKEN&formato=json|geojson|csv → registros para ArcGIS
  *   GET  (sin parámetros)                                     → estado del servicio
  */
@@ -82,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.4.0" });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.5.0" });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -119,6 +122,8 @@ function doPost(e) {
     if (payload.accion === "arcgis") return json_(consultarCapa_(payload));
     if (payload.accion === "subir") { payload.registradoPor = usuario.usuario; return json_(subirFoto_(payload)); }
     if (payload.accion === "anular") return json_(anularRegistro_(payload));
+    if (payload.accion === "puntos") return json_(puntosGuardados_(payload, usuario));
+    if (payload.accion === "eliminar") return json_(eliminarPunto_(payload, usuario));
     throw new Error("Acción no reconocida.");
   } catch (err) {
     return json_({ status: err.sinSesion ? "sin_sesion" : "error", message: err.message || String(err) });
@@ -796,11 +801,14 @@ function validarSesion_(token) {
 
 // Llamada rápida a Gemini: sin «razonamiento» extra (responde mucho más rápido para leer sellos).
 // Si el modelo no acepta esa opción, se repite la llamada sin ella.
-function geminiRapido_(key, modelo, body) {
+function geminiRapido_(key, modelo, body, preciso) {
+  if (preciso) modelo = prop_("GEMINI_MODEL_PRECISO", true) || modelo;
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
   const enviar = function (b) {
     return UrlFetchApp.fetch(url, { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key }, payload: JSON.stringify(b) });
   };
+  // Modo preciso: el modelo razona antes de responder (más lento, pero revisa dígito por dígito)
+  if (preciso) return enviar(body);
   const rapido = JSON.parse(JSON.stringify(body));
   rapido.generationConfig = Object.assign({}, rapido.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
   let res = enviar(rapido);
@@ -809,67 +817,89 @@ function geminiRapido_(key, modelo, body) {
 }
 
 
+// Formatos de sello que llegan (todos con el texto sobre la foto, casi siempre abajo a la derecha):
+//   «26/10/26, 10:36 a.m.» / «6° 38' 21.075" N, 74° 53' 24.732" W» / «Porcesito - La Cortada - Yolombó - Vegachí»
+//   «6.40101N 76.04736W» / «Antioquia» / «Caicedo - Urrao» / «1 jun. 2025 9:32:48 a. m.»
+//   «13/05/26, 8:40 a.m. N 6° 22' 10" W 75° 42' 28" Palmitas»
+const REGLAS_SELLO =
+  "Formatos de sello que se usan (ejemplos reales):\n" +
+  "A) «26/10/26, 10:36 a.m.» / «6° 38' 21.075\" N, 74° 53' 24.732\" W» / «Porcesito - La Cortada - Yolombó - Vegachí»\n" +
+  "B) «6.40101N 76.04736W» / «Antioquia» / «Caicedo - Urrao» / «1 jun. 2025 9:32:48 a. m.» (coordenadas en grados decimales con N y W)\n" +
+  "C) «13/05/26, 8:40 a.m. N 6° 22' 10\" W 75° 42' 28\" Palmitas»\n" +
+  "Reglas: las fechas numéricas van en formato día/mes/año. En Antioquia la latitud está entre 5 y 9 grados N y la longitud entre 73 y 77 grados W. " +
+  "Copia cada dígito tal cual (no redondees ni completes). «Antioquia», «Colombia» o «Antioquia, Colombia» son el departamento y el país: NUNCA son el tramo. " +
+  "El tramo es el nombre del lugar o de la vía (ej. «Caicedo - Urrao», «Remedios», «Vía Granada - Guatapé» → «Granada - Guatapé»).\n";
+
 function leerSello_(payload) {
   if (!payload.base64) throw new Error("No llegó la imagen.");
   const key = prop_("GEMINI_API_KEY");
   const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
+  const conRecorte = typeof payload.recorte === "string" && payload.recorte.length > 100;
 
   const prompt =
     "La imagen es una foto de inspección vial de la Gobernación de Antioquia (Colombia). " +
-    "Suele tener un sello de texto superpuesto (normalmente en la esquina inferior derecha) con fecha, " +
-    "coordenadas en grados-minutos-segundos y el nombre de la vía.\n" +
+    "Suele tener un sello de texto superpuesto con fecha, coordenadas y el nombre del tramo o lugar.\n" +
+    (conRecorte ? "Te envío dos imágenes: la 1 es la foto completa y la 2 es una AMPLIACIÓN de la parte baja de la misma foto, donde suele ir el sello. " +
+      "Lee el texto en la ampliación (se ve más nítido) y usa la foto completa para ver la afectación y por si el sello está en otra parte.\n" : "") +
+    REGLAS_SELLO +
     "Lee ese sello EXACTAMENTE como aparece. No inventes: si algo no se lee, devuelve \"\".\n" +
     "Responde SOLO JSON con estas claves:\n" +
-    "fecha_texto (tal cual), fecha_iso (AAAA-MM-DD; las fechas numéricas van en formato día/mes/año), " +
-    "latitud (tal cual, ej 6°10'42\"N), longitud (tal cual, ej 75°9'57\"W), " +
-    "tramo (nombre del tramo COMPLETO y exacto, sin la palabra Vía; en el sello estándar es la línea que va debajo de las coordenadas, " +
-    "ej \"Porcesito - La Cortada - Yolombó - Vegachí\" o \"Remedios\"), " +
+    "fecha_texto (tal cual), fecha_iso (AAAA-MM-DD), " +
+    "latitud (tal cual, ej 6°10'42\"N o 6.40101N), longitud (tal cual, ej 75°9'57\"W o 76.04736W), " +
+    "tramo (nombre del tramo COMPLETO y exacto, sin la palabra Vía, ej \"Porcesito - La Cortada - Yolombó - Vegachí\", \"Caicedo - Urrao\" o \"Remedios\"), " +
     "codigo_via (código oficial de la vía si aparece, ej 60AN17; si no, \"\"), " +
     "municipio (municipio de Antioquia escrito en el sello, si aparece; si no, \"\"), " +
+    "pr (abscisa PR o K escrita en el sello, ej 18+200, o \"\"), " +
     "tipo_afectacion (lo que se VE en la foto, exactamente uno de: " + TIPOS_AFECTACION.join(" | ") + "), " +
-    "sello_legible (true/false). Las coordenadas pueden venir en grados decimales, ej +6,1694N -75,1630W.";
+    "seguridad (alta, media o baja: qué tan seguro estás de cada dígito de las coordenadas), " +
+    "sello_legible (true/false).";
 
-  const body = {
-    contents: [{ parts: [
-      { text: prompt },
-      { inline_data: { mime_type: payload.mimeType || "image/jpeg", data: payload.base64 } }
-    ] }],
-    generationConfig: { responseMimeType: "application/json", temperature: 0 }
-  };
+  const parts = [{ text: prompt }, { inline_data: { mime_type: payload.mimeType || "image/jpeg", data: payload.base64 } }];
+  if (conRecorte) parts.push({ inline_data: { mime_type: "image/jpeg", data: payload.recorte } });
+  const body = { contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } };
 
-  const res = geminiRapido_(key, modelo, body);
+  const res = geminiRapido_(key, modelo, body, !!payload.preciso);
   const code = res.getResponseCode();
   if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + res.getContentText().slice(0, 200) };
 
-  const r = JSON.parse(res.getContentText());
-  const texto = r && r.candidates && r.candidates[0] && r.candidates[0].content &&
-    r.candidates[0].content.parts && r.candidates[0].content.parts[0] && r.candidates[0].content.parts[0].text;
-  if (!texto) return { status: "error", message: "Gemini no devolvió texto para esta foto." };
-
-  let d;
-  try { d = JSON.parse(texto.replace(/^```json\s*|```$/g, "")); }
-  catch (_) { return { status: "error", message: "No se pudo interpretar la respuesta de Gemini." }; }
+  const d = jsonGemini_(res);
+  if (!d) return { status: "error", message: "No se pudo interpretar la respuesta de Gemini." };
 
   const lat = dmsADecimal_(d.latitud);
   let lon = dmsADecimal_(d.longitud);
-  if (lon !== null && lon > 0 && lon > 60) lon = -lon; // Antioquia siempre es longitud Oeste
+  if (lon !== null && lon > 60) lon = -lon; // Antioquia siempre es longitud Oeste
+  const fuera = fueraDeAntioquia_(lat, lon);
+  const tramo = String(d.tramo || "").replace(/^\s*v[ií]a\s*/i, "").replace(/^\s*(antioquia|colombia)[\s,.\-–]*(colombia)?[\s,.\-–]*/i, "").trim();
 
   return {
     status: "success",
+    preciso: !!payload.preciso,
     fechaTexto: d.fecha_texto || "",
     fecha: /^\d{4}-\d{2}-\d{2}$/.test(d.fecha_iso || "") ? d.fecha_iso : "",
     latitudDMS: d.latitud || "",
     longitudDMS: d.longitud || "",
-    latitud: lat,
-    longitud: lon,
-    tramo: String(d.tramo || "").replace(/^\s*v[ií]a\s*/i, ""),
+    latitud: fuera ? null : lat,
+    longitud: fuera ? null : lon,
+    tramo: /^(antioquia|colombia)$/i.test(tramo) ? "" : tramo,
     codigoVia: String(d.codigo_via || "").toUpperCase().replace(/\s/g, ""),
     municipio: String(d.municipio || ""),
+    pr: String(d.pr || ""),
     tipoAfectacion: TIPOS_AFECTACION.indexOf(d.tipo_afectacion) >= 0 ? d.tipo_afectacion : "",
-    selloLegible: !!d.sello_legible && lat !== null && lon !== null,
-    fueraDeAntioquia: fueraDeAntioquia_(lat, lon)
+    seguridad: ["alta", "media", "baja"].indexOf(String(d.seguridad || "").toLowerCase()) >= 0 ? String(d.seguridad).toLowerCase() : "",
+    selloLegible: !!d.sello_legible && lat !== null && lon !== null && !fuera,
+    fueraDeAntioquia: fuera
   };
+}
+
+// Texto JSON de la respuesta de Gemini (con o sin ```json)
+function jsonGemini_(res) {
+  try {
+    const r = JSON.parse(res.getContentText());
+    const partes = (r && r.candidates && r.candidates[0] && r.candidates[0].content && r.candidates[0].content.parts) || [];
+    const texto = partes.filter(function (p) { return p && p.text && !p.thought; }).map(function (p) { return p.text; }).join("");
+    return texto ? JSON.parse(texto.replace(/^\s*```json\s*|\s*```\s*$/g, "")) : null;
+  } catch (_) { return null; }
 }
 
 /* ======================= Capas de referencia (red vial y división política) ======================= */
@@ -911,9 +941,13 @@ function leerPdf_(payload) {
     "responsable (quién hizo la visita, exactamente uno de: " + RESPONSABLES.join(" | ") + "; Rentan = RENTAN y sus contratistas o interventorías; vacío si no es claro), " +
     "puntos (lista: un elemento por cada SITIO o AFECTACIÓN distinta que describa el documento, sin importar el formato del documento: " +
     "puede identificarse por coordenadas, por abscisa PR/K (ej PR 18+200, K25+300), por número de tramo o por el nombre del lugar; " +
+    "si el documento es un registro fotográfico con una tabla por punto (Municipio | Punto | Vía | Abscisa | Latitud | Longitud), cada fila es un punto: " +
+    "NO omitas ninguna fila aunque el documento tenga muchas páginas; " +
     "incluye también los sitios cuyas coordenadas solo aparecen en los sellos superpuestos de las FOTOGRAFÍAS de campo (léelas con cuidado: grados, minutos y segundos; N/S y W/O); " +
     "NO tomes coordenadas de mapas, imágenes satelitales ni capturas de pantalla. " +
-    "No inventes sitios ni coordenadas. Claves: nombre (ej \"Tramo 1\" o \"PR 18+200\"), latitud (tal cual o vacío), longitud (tal cual o vacío), " +
+    "No inventes sitios ni coordenadas. Claves: nombre (ej \"Tramo 1\", \"PR 18+200\" o \"Caicedo P1\"), latitud (tal cual o vacío), longitud (tal cual o vacío; en Antioquia siempre es W aunque no lo diga), " +
+    "via (nombre COMPLETO de la vía o tramo de ESE sitio, sin el código ni el orden, ej \"La Miserenga (Cruce Ruta 62) - Ebéjico - Heliconia - Alto del Chuscal\"), " +
+    "codigo_via (código de la vía de ESE sitio, ej 25BAN06-1), municipio (municipio de ESE sitio), " +
     "pr (abscisa PR o K si aparece, ej 18+200, o vacío), fecha_iso (fecha de ese sitio si es distinta a la de la visita, o vacío), " +
     "tipo_afectacion (exactamente uno de: " + TIPOS_AFECTACION.join(" | ") + "), " +
     "descripcion (lo que dice el documento sobre ese sitio: lo encontrado, medidas y lo recomendado, máximo 5 frases), pagina (página donde se describe)), " +
@@ -943,7 +977,8 @@ function leerPdf_(payload) {
     let lon = dmsADecimal_(p.longitud);
     if (lon !== null && lon > 60) lon = -lon;
     return {
-      nombre: String(p.nombre || ""), latitud: lat, longitud: lon,
+      nombre: String(p.nombre || ""), latitud: fueraDeAntioquia_(lat, lon) ? null : lat, longitud: fueraDeAntioquia_(lat, lon) ? null : lon,
+      via: String(p.via || "").replace(/^\s*v[ií]a\s*/i, ""), codigoVia: String(p.codigo_via || "").toUpperCase().replace(/\s/g, ""), municipio: String(p.municipio || ""),
       tipoAfectacion: TIPOS_AFECTACION.indexOf(p.tipo_afectacion) >= 0 ? p.tipo_afectacion : "",
       descripcion: String(p.descripcion || ""), pr: String(p.pr || ""), pagina: Number(p.pagina) || 1,
       fecha: /^\d{4}-\d{2}-\d{2}$/.test(p.fecha_iso || "") ? p.fecha_iso : ""
@@ -971,11 +1006,13 @@ function leerFotos_(payload) {
     "Te envío " + imgs.length + " imágenes en orden (0 a " + (imgs.length - 1) + "), sacadas de un acta de visita vial de Antioquia (Colombia). " +
     "Muchas son fotos con un sello de texto superpuesto (fecha, hora, coordenadas y lugar), por ejemplo «13/05/26, 8:40 a.m. N 6° 22' 10\" W 75° 42' 28\" Palmitas»; " +
     "otras son mapas, imágenes satelitales, capturas de pantalla, tablas o logos. SOLO cuentan las coordenadas del SELLO de una FOTOGRAFÍA de campo: " +
+    REGLAS_SELLO +
     "en mapas, capturas, tablas o cualquier imagen sin ese sello devuelve es_foto_con_sello=false y legible=false aunque se vean coordenadas. " +
     "Lee EXACTAMENTE lo escrito, sin inventar ni deducir del paisaje. " +
     "Las fechas numéricas van en formato día/mes/año. Responde SOLO JSON: {\"fotos\":[{\"indice\":0, \"fecha_iso\":\"AAAA-MM-DD o vacío\", " +
     "\"latitud\":\"tal cual, ej N 6°22'10\\\" o vacío\", \"longitud\":\"tal cual, ej W 75°42'28\\\" o vacío\", " +
-    "\"pr\":\"abscisa PR escrita en el sello, ej 18+200, o vacío\", \"es_foto_con_sello\":true, \"legible\":true}]} con un elemento por imagen.";
+    "\"pr\":\"abscisa PR escrita en el sello, ej 18+200, o vacío\", \"tramo\":\"nombre del tramo o lugar del sello (nunca Antioquia ni Colombia), o vacío\", " +
+    "\"es_foto_con_sello\":true, \"legible\":true}]} con un elemento por imagen.";
   const parts = [{ text: prompt }];
   imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
   const res = geminiRapido_(key, modelo, { contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } });
@@ -988,7 +1025,8 @@ function leerFotos_(payload) {
   const fotos = (Array.isArray(d.fotos) ? d.fotos : []).map(function (f) {
     const lat = dmsADecimal_(f.latitud); let lon = dmsADecimal_(f.longitud);
     if (lon !== null && lon > 60) lon = -lon;
-    return { indice: Number(f.indice), esFoto: f.es_foto_con_sello !== false, pr: String(f.pr || ""), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
+    return { indice: Number(f.indice), esFoto: f.es_foto_con_sello !== false, pr: String(f.pr || ""),
+      tramo: /^\s*(antioquia|colombia)\s*$/i.test(String(f.tramo || "")) ? "" : String(f.tramo || "").replace(/^\s*v[ií]a\s*/i, ""), fecha: /^\d{4}-\d{2}-\d{2}$/.test(f.fecha_iso || "") ? f.fecha_iso : "", latitud: lat, longitud: lon,
       legible: !!f.legible && f.es_foto_con_sello !== false && lat !== null && lon !== null && !fueraDeAntioquia_(lat, lon) };
   });
   return { status: "success", fotos: fotos };
@@ -1200,7 +1238,7 @@ function reenviarArcgis() {
   let ok = 0, mal = 0;
   for (let i = 1; i < datos.length; i++) {
     const r = datos[i];
-    if (r[c("EstadoRegistro")] === "ANULADO" || r[c("ArcGIS_FID")] !== "") continue;
+    if (inactivo_(r[c("EstadoRegistro")]) || r[c("ArcGIS_FID")] !== "") continue;
     const fecha = r[c("FechaVisita")];
     const p = {
       fecha: fecha instanceof Date ? Utilities.formatDate(fecha, "America/Bogota", "yyyy-MM-dd") : texto_(fecha),
@@ -1293,6 +1331,150 @@ function anularRegistro_(p) {
   }
 }
 
+/* ======================= Eliminar puntos de ArcGIS ======================= */
+// Quién puede eliminar: los administradores (Rol = admin en la hoja Usuarios) cualquier punto;
+// los demás, solo los puntos que ellos mismos registraron. Antes de borrar se guarda una copia
+// completa del punto (atributos y ubicación) en la hoja «Eliminados», para poder restaurarlo.
+const HOJA_ELIMINADOS = "Eliminados";
+const COLUMNAS_ELIMINADOS = ["Fecha", "Usuario", "ID", "ArcGIS_FID", "Motivo", "Atributos", "Geometria", "Restaurado"];
+function inactivo_(estado) { return ["ANULADO", "ELIMINADO"].indexOf(texto_(estado).toUpperCase()) >= 0; }
+function esAdmin_(u) { return /^(admin|administrador|administradora|superadmin)$/i.test(texto_(u && u.rol)); }
+function hojaEliminados_() {
+  const ss = SpreadsheetApp.openById(prop_("SPREADSHEET_ID"));
+  let h = ss.getSheetByName(HOJA_ELIMINADOS);
+  if (!h) { h = ss.insertSheet(HOJA_ELIMINADOS); h.appendRow(COLUMNAS_ELIMINADOS); h.getRange(1, 1, 1, COLUMNAS_ELIMINADOS.length).setFontWeight("bold"); h.setFrozenRows(1); }
+  return h;
+}
+
+function puntosGuardados_(p, u) {
+  const h = hoja_();
+  const datos = h.getDataRange().getValues();
+  if (datos.length < 2) return { status: "success", admin: esAdmin_(u), puntos: [] };
+  const enc = datos[0], c = function (n) { return enc.indexOf(n); };
+  const admin = esAdmin_(u), yo = normUsuario_(u.usuario);
+  const q = normUsuario_(p.buscar);
+  const fecha = function (v) { return v instanceof Date ? Utilities.formatDate(v, "America/Bogota", "yyyy-MM-dd") : texto_(v); };
+  const out = [];
+  for (let i = datos.length - 1; i >= 1 && out.length < 150; i--) {
+    const r = datos[i];
+    if (inactivo_(r[c("EstadoRegistro")])) continue;
+    if (!admin && normUsuario_(r[c("RegistradoPor")]) !== yo) continue;
+    const x = {
+      id: texto_(r[c("ID")]), fecha: fecha(r[c("FechaVisita")]), municipio: texto_(r[c("Municipio")]), tramo: texto_(r[c("NombreTramo")]),
+      codigo: texto_(r[c("CodigoVia")]), tipo: texto_(r[c("TipoAfectacion")]), fid: texto_(r[c("ArcGIS_FID")]), arcgis: texto_(r[c("ArcGIS_Estado")]),
+      por: texto_(r[c("RegistradoPor")]), url: texto_(r[c("URL")]), latitud: numero_(r[c("Latitud")]), longitud: numero_(r[c("Longitud")])
+    };
+    if (q && normUsuario_([x.id, x.fecha, x.municipio, x.tramo, x.codigo, x.tipo, x.fid, x.por].join(" ")).indexOf(q) < 0) continue;
+    out.push(x);
+  }
+  return { status: "success", admin: admin, puntos: out };
+}
+
+function eliminarPunto_(p, u) {
+  const motivo = texto_(p.motivo);
+  if (motivo.length < 3) throw new Error("Escribe el motivo de la eliminación.");
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const h = hoja_();
+    const datos = h.getDataRange().getValues();
+    const enc = datos[0], c = function (n) { return enc.indexOf(n); };
+    let fila = -1;
+    for (let i = datos.length - 1; i >= 1; i--) {
+      if ((p.id && texto_(datos[i][c("ID")]) === texto_(p.id)) || (!p.id && p.fid && texto_(datos[i][c("ArcGIS_FID")]) === texto_(p.fid))) { fila = i; break; }
+    }
+    const r = fila > 0 ? datos[fila] : null;
+    if (!r && !p.fid) throw new Error("No se encontró el registro " + texto_(p.id) + ".");
+    if (r && inactivo_(r[c("EstadoRegistro")])) throw new Error("El registro " + texto_(r[c("ID")]) + " ya estaba " + texto_(r[c("EstadoRegistro")]).toLowerCase() + ".");
+    if (!esAdmin_(u) && (!r || normUsuario_(r[c("RegistradoPor")]) !== normUsuario_(u.usuario)))
+      throw new Error(r ? "Solo puedes eliminar los puntos que tú registraste. Pídeselo a un administrador." : "Solo un administrador puede eliminar puntos que no se cargaron con VIP-C.");
+
+    const id = r ? texto_(r[c("ID")]) : "";
+    const fid = texto_(r ? r[c("ArcGIS_FID")] : p.fid);
+    const ahora = Utilities.formatDate(new Date(), "America/Bogota", "yyyy-MM-dd HH:mm:ss");
+    let resultadoArcgis = "no estaba en ArcGIS";
+
+    if (fid) {
+      const url = arcgisUrl_(), token = tokenArcgis_();
+      // 1) Copia completa del punto antes de borrarlo
+      const q = { objectIds: fid, outFields: "*", returnGeometry: "true", f: "json" }; if (token) q.token = token;
+      const dq = JSON.parse(UrlFetchApp.fetch(url + "/query", { method: "post", payload: q, muteHttpExceptions: true }).getContentText() || "{}");
+      if (dq.error) throw new Error("ArcGIS: " + (dq.error.message || "no se pudo consultar el punto") + ". No se eliminó nada.");
+      const ft = (dq.features || [])[0];
+      if (ft) {
+        hojaEliminados_().appendRow([ahora, celda_(u.usuario), celda_(id), fid, celda_(motivo), JSON.stringify(ft.attributes || {}), JSON.stringify(ft.geometry || null), ""]);
+        // 2) Borrado
+        const pl = { objectIds: fid, f: "json" }; if (token) pl.token = token;
+        const d = JSON.parse(UrlFetchApp.fetch(url + "/deleteFeatures", { method: "post", payload: pl, muteHttpExceptions: true }).getContentText() || "{}");
+        const dr = d.deleteResults && d.deleteResults[0];
+        if (!dr || !dr.success) {
+          const e = (dr && dr.error) || d.error || {};
+          throw new Error("ArcGIS no dejó eliminar el punto: " + (e.message || e.description || "error") +
+            (e.code === 499 || e.code === 498 || e.code === 403 ? " (la capa no permite borrar: configura ARCGIS_USUARIO y ARCGIS_CLAVE de una cuenta con permiso de edición, o activa «Eliminar» en la capa)" : "") + ".");
+        }
+        resultadoArcgis = "eliminado";
+      } else resultadoArcgis = "ya no estaba en ArcGIS";
+    }
+
+    if (r) {
+      const n = fila + 1;
+      h.getRange(n, c("EstadoRegistro") + 1).setValue("ELIMINADO");
+      h.getRange(n, c("FechaAnulacion") + 1).setValue(ahora);
+      h.getRange(n, c("MotivoAnulacion") + 1).setValue(celda_(motivo + " (eliminado por " + u.usuario + ")"));
+      if (c("ArcGIS_Estado") >= 0) h.getRange(n, c("ArcGIS_Estado") + 1).setValue(resultadoArcgis === "eliminado" ? "ELIMINADO " + ahora + " por " + u.usuario : texto_(r[c("ArcGIS_Estado")]));
+      const fileId = r[c("FileId")];
+      // La foto va a la papelera de Drive (se puede recuperar 30 días). Un PDF compartido por otros puntos activos se deja.
+      if (fileId) {
+        const otros = datos.some(function (x, k) { return k !== fila && k > 0 && texto_(x[c("FileId")]) === texto_(fileId) && !inactivo_(x[c("EstadoRegistro")]); });
+        if (!otros) { try { DriveApp.getFileById(String(fileId)).setTrashed(true); } catch (_) {} }
+      }
+    }
+    return { status: "success", id: id, fid: fid, arcgis: resultadoArcgis };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Restaura en ArcGIS un punto eliminado desde VIP-C (copia de la hoja «Eliminados»).
+ *  Cambia ID_O_FID por el ID del registro (ej. F-000123) o el FID de ArcGIS y ejecútala desde el editor. */
+function restaurarPuntoEliminado() {
+  const ID_O_FID = "F-000000";
+  const he = hojaEliminados_(), filas = he.getDataRange().getValues();
+  let k = -1;
+  for (let i = filas.length - 1; i >= 1; i--) if (texto_(filas[i][2]) === ID_O_FID || texto_(filas[i][3]) === ID_O_FID) { k = i; break; }
+  if (k < 0) { Logger.log("No está en la hoja Eliminados: " + ID_O_FID); return; }
+  if (texto_(filas[k][7])) { Logger.log("Ya se había restaurado: " + filas[k][7]); return; }
+  const attrs = JSON.parse(filas[k][5] || "{}"), geom = JSON.parse(filas[k][6] || "null");
+  ["OBJECTID", "FID", "GlobalID", "globalid", "objectid"].forEach(function (x) { delete attrs[x]; });
+  const token = tokenArcgis_();
+  const pl = { features: JSON.stringify([{ attributes: attrs, geometry: geom }]), f: "json" }; if (token) pl.token = token;
+  const d = JSON.parse(UrlFetchApp.fetch(arcgisUrl_() + "/addFeatures", { method: "post", payload: pl, muteHttpExceptions: true }).getContentText() || "{}");
+  const r = d.addResults && d.addResults[0];
+  if (!r || !r.success) { Logger.log("No se pudo restaurar: " + JSON.stringify(d).slice(0, 300)); return; }
+  const ahora = Utilities.formatDate(new Date(), "America/Bogota", "yyyy-MM-dd HH:mm:ss");
+  he.getRange(k + 1, 8).setValue("Restaurado " + ahora + " · FID nuevo " + r.objectId);
+  // El registro vuelve a quedar activo, con su foto (si sigue en la papelera de Drive)
+  const id = texto_(filas[k][2]);
+  if (id) {
+    const h = hoja_(), datos = h.getDataRange().getValues(), enc = datos[0], c = function (n) { return enc.indexOf(n) + 1; };
+    for (let i = datos.length - 1; i >= 1; i--) if (texto_(datos[i][0]) === id) {
+      h.getRange(i + 1, c("EstadoRegistro")).setValue("ACTIVO");
+      h.getRange(i + 1, c("ArcGIS_FID")).setValue(r.objectId);
+      h.getRange(i + 1, c("ArcGIS_Estado")).setValue("RESTAURADO " + ahora);
+      const fileId = datos[i][c("FileId") - 1];
+      if (fileId) {
+        try {
+          const f = DriveApp.getFileById(String(fileId)); f.setTrashed(false);
+          const fa = { attachment: f.getBlob(), f: "json" }; if (token) fa.token = token;
+          UrlFetchApp.fetch(arcgisUrl_() + "/" + r.objectId + "/addAttachment", { method: "post", payload: fa, muteHttpExceptions: true });
+        } catch (_) {}
+      }
+      break;
+    }
+  }
+  Logger.log("Restaurado " + ID_O_FID + " con FID nuevo " + r.objectId);
+}
+
 /* ======================= Lectura de registros ======================= */
 
 function listarRegistros_() {
@@ -1304,7 +1486,7 @@ function listarRegistros_() {
     const o = {};
     enc.forEach(function (c, i) { o[c] = fila[i] instanceof Date ? Utilities.formatDate(fila[i], "America/Bogota", "yyyy-MM-dd") : fila[i]; });
     return o;
-  }).filter(function (o) { return o.EstadoRegistro !== "ANULADO"; });
+  }).filter(function (o) { return !inactivo_(o.EstadoRegistro); });
 }
 
 function aGeoJSON_(registros) {

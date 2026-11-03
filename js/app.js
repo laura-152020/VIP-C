@@ -100,6 +100,9 @@
       // El municipio ya viene de la capa oficial: el aviso de límites aproximados deja de aplicar
       if (/menciona .* y las coordenadas caen en/.test(r.mensaje || "")) r.mensaje = "";
     }
+    if (m && r.municipioDoc && m.n !== r.municipio && !/capa oficial/.test(r.mensaje || "")) {
+      r.mensaje = `El documento dice ${r.municipio} y las coordenadas caen en ${m.n} (capa oficial). Revisa el municipio.`; cambio = true;
+    }
     const sub = info.subregion && SUBREGIONES.find((x) => norm(x) === norm(info.subregion));
     if (sub && r.municipioAuto && r.subregion !== sub) { r.subregion = sub; cambio = true; }
     const bonito = (t) => (t === t.toUpperCase() ? t.toLowerCase().replace(/(^|[\s(-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()).replace(/\b(De|Del|La|Las|Los|El|Y)\b/g, (x) => x.toLowerCase()).replace(/^./, (c) => c.toUpperCase()) : t);
@@ -121,10 +124,12 @@
     const texto = String(r[k] || "").trim();
     if (!texto) return;
     const avisar = (t, error) => { if (r === manual) msgManual(t, error); else if (regPdf() === r) msgPdf(t, error); };
+    const t0 = Date.now();
     try {
       avisar("Buscando en la red vial…");
       const v = k === "codigoVia" ? await Capas.porCodigo(r.codigoVia) : await Capas.porNombre(r.nombreTramo);
-      if (!v) { avisar(`No se encontró «${texto}» en la red vial (Circular 10). Revisa cómo está escrito o llena el otro campo a mano.`, true); return; }
+      if (r.eleccion && r.eleccion >= t0) { avisar(""); return; } // eligió de la lista mientras tanto
+      if (!v) { avisar(`No se encontró «${texto}» en la red vial (Circular 10). Despliega la lista (▾) para escogerlo, o déjalo escrito así.`, true); return; }
       avisar(`Red vial: ${v.codigo} · ${v.nombre} (${v.orden.toLowerCase()}).`);
       const otro = k === "codigoVia" ? "nombreTramo" : "codigoVia";
       if (String(r[otro]).trim() && !(r.relAuto && r.relCampo === otro)) return;
@@ -148,11 +153,105 @@
   function cargarListasVias() {
     if (typeof Capas === "undefined") return;
     if (HAY_BACKEND) Capas.usarServidor((capa, ruta, params) => Api.post("arcgis", { capa, ruta, params }));
-    Capas.listas().then((l) => {
-      $("#lista-vias-cod").innerHTML = l.codigos.map((v) => `<option value="${esc(v.codigo)}">${esc(v.nombre)}</option>`).join("");
-      $("#lista-vias-nom").innerHTML = l.nombres.map((v) => `<option value="${esc(v.nombre)}">${esc(v.codigo)}</option>`).join("");
-    }).catch(() => {});
+    Capas.todasLasVias().catch(() => {}); // precarga la red vial para que la lista de tramos abra rápido
   }
+
+  /* ---------- Lista desplegable de tramos ----------
+     Se despliega con ▾ o al escribir en «Código» o «Nombre del tramo». Arriba, las vías cercanas al punto
+     (si tiene coordenadas); abajo, la red vial completa filtrada por lo escrito. Al elegir, se llenan los dos campos. */
+  const cajaDe = (el) => el.closest("#form-manual, #form-pdf, .card");
+  function registroDe(el) {
+    const c = cajaDe(el); if (!c) return null;
+    if (c.id === "form-manual") return manual;
+    if (c.id === "form-pdf") return pdfActual ? regPdf() : null;
+    return items.find((x) => x.id == c.dataset.id) || null;
+  }
+  function repintarCaja(c, r) { if (c.id === "form-manual") pintarManual(); else if (c.id === "form-pdf") pintarPdf(); else actualizar(r); }
+  function cerrarListas(excepto) {
+    document.querySelectorAll(".combo-lista:not([hidden])").forEach((l) => {
+      if (l === excepto) return;
+      l.hidden = true; l.innerHTML = "";
+      l.parentNode.querySelectorAll('[aria-controls="' + l.id + '"]').forEach((i) => i.setAttribute("aria-expanded", "false"));
+    });
+  }
+  let pedidoLista = 0;
+  async function abrirLista(el, texto) {
+    const c = cajaDe(el), r = registroDe(el), lista = c && $(".combo-lista", c);
+    if (!lista || !r || typeof Capas === "undefined") return;
+    cerrarListas(lista);
+    const n = ++pedidoLista;
+    lista.hidden = false;
+    c.querySelectorAll('[aria-controls="' + lista.id + '"]').forEach((i) => i.setAttribute("aria-expanded", "true"));
+    if (!lista.innerHTML) lista.innerHTML = '<div class="combo__vacio"><span class="girando" aria-hidden="true"></span> Cargando la red vial…</div>';
+    const [cerca, todas] = await Promise.all([
+      tieneCoord(r) ? Capas.viasCercanas(r.latitud, r.longitud, 1500, 6).catch(() => []) : Promise.resolve([]),
+      Capas.buscarVias(texto || "", 60).catch(() => null)
+    ]);
+    if (n !== pedidoLista || lista.hidden) return;
+    const ops = [];
+    const op = (v, extra) => { ops.push(v); return `<button type="button" class="combo__op" role="option" data-op="${ops.length - 1}"><b>${esc(v.nombre || "(sin nombre)")}</b><span>${esc(v.codigo || "")}</span>${extra ? `<small>${extra}</small>` : ""}</button>`; };
+    let html = "";
+    const q = norm(texto);
+    const cercaF = cerca.filter((v) => !q || norm(v.nombre + " " + v.codigo).includes(q));
+    if (cercaF.length) html += '<div class="combo__grupo">Cerca del punto</div>' + cercaF.map((v) => op(v, `Vía ${esc((v.orden || "").toLowerCase())} a ${Math.round(v.distancia)} m`)).join("");
+    if (todas === null) html += '<div class="combo__vacio">No se pudo cargar la red vial. Revisa la conexión o escribe el tramo a mano.</div>';
+    else {
+      const resto = todas.filter((v) => !cercaF.some((x) => x.codigo === v.codigo && x.nombre === v.nombre));
+      if (resto.length) html += `<div class="combo__grupo">${q ? "Red vial · coincidencias" : "Red vial (Circular 10)"}</div>` + resto.map((v) => op(v, v.orden ? "Vía " + esc(v.orden.toLowerCase()) : "")).join("");
+      else if (!cercaF.length) html += `<div class="combo__vacio">Ninguna vía de la red vial coincide con «${esc(texto)}». Puedes dejarlo escrito así.</div>`;
+    }
+    lista.innerHTML = html;
+    lista._ops = ops;
+  }
+  function elegirVia(boton) {
+    const c = cajaDe(boton), r = registroDe(boton), lista = boton.closest(".combo-lista");
+    const v = lista && lista._ops && lista._ops[Number(boton.dataset.op)];
+    if (!r || !v) return;
+    r.codigoVia = v.codigo || ""; r.nombreTramo = v.nombre || "";
+    r.tramoDe = "lista"; r.viaAuto = false; r.relAuto = false; r.eleccion = Date.now();
+    r.editados = Object.assign(r.editados || {}, { codigoVia: true, nombreTramo: true });
+    if (v.distancia != null) r.viaInfo = `vía ${String(v.orden || "").toLowerCase()} a ${Math.round(v.distancia)} m`;
+    cerrarListas();
+    repintarCaja(c, r);
+    const n = document.getElementById((c.id === "form-manual" ? "m-" : c.id === "form-pdf" ? "p-" : "c" + r.id + "-") + "nt");
+    if (n) n.focus();
+  }
+  let esperaLista = null;
+  document.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el.matches || !el.matches('[data-k="nombreTramo"], [data-k="codigoVia"]')) return;
+    clearTimeout(esperaLista);
+    esperaLista = setTimeout(() => abrirLista(el, el.value), 160);
+  });
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("[data-combo]");
+    if (b) {
+      e.preventDefault();
+      const c = cajaDe(b), lista = c && $(".combo-lista", c);
+      if (lista && !lista.hidden) { cerrarListas(); return; }
+      abrirLista(b, "");
+      return;
+    }
+    const o = e.target.closest && e.target.closest("[data-op]");
+    if (o) { e.preventDefault(); elegirVia(o); return; }
+    if (!(e.target.closest && e.target.closest(".combo, .combo-lista"))) cerrarListas();
+  });
+  document.addEventListener("keydown", (e) => {
+    const el = e.target;
+    if (!el.closest) return;
+    const enLista = el.closest(".combo-lista"), enCampo = el.matches('[data-k="nombreTramo"], [data-k="codigoVia"]');
+    if (!enLista && !enCampo) return;
+    if (e.key === "Escape") { cerrarListas(); if (enLista) { const c = cajaDe(el); const i = c && $('[data-k="nombreTramo"]', c); if (i) i.focus(); } return; }
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const c = cajaDe(el), lista = c && $(".combo-lista", c);
+    if (!lista || lista.hidden) { if (enCampo && e.key === "ArrowDown") { e.preventDefault(); abrirLista(el, ""); } return; }
+    const ops = [...lista.querySelectorAll("[data-op]")]; if (!ops.length) return;
+    e.preventDefault();
+    const i = ops.indexOf(document.activeElement);
+    const sig = enCampo ? (e.key === "ArrowDown" ? 0 : ops.length - 1) : Math.max(0, Math.min(ops.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)));
+    if (enLista && i === 0 && e.key === "ArrowUp") { const f = $('[data-k="nombreTramo"]', c); if (f) f.focus(); return; }
+    ops[sig].focus();
+  });
 
   function completarSubregion(r) {
     const m = MUN_POR_NOMBRE[norm(r.municipio)];
@@ -169,6 +268,10 @@
     const extra = [r.vereda && "Vereda " + esc(r.vereda), r.viaInfo && esc(r.viaInfo)].filter(Boolean).join(" · ");
     return `${r.latitud.toFixed(6)}, ${r.longitud.toFixed(6)}${origen ? " · " + origen : ""}${extra ? " · " + extra : ""} <a href="https://www.google.com/maps?q=${r.latitud},${r.longitud}" target="_blank" rel="noopener">Ver ubicación</a>`;
   }
+  const origenTramo = (r) => {
+    const t = r.viaAuto ? "red vial" : { lista: "de la lista", gem: "leído con IA", pdf: "del PDF", redvial: "red vial", ocr: "del sello" }[r.tramoDe] || "";
+    return t ? `<span class="auto">· ${t}</span>` : "";
+  };
   function campos(r, p) {
     const alerta = fuera(r) ? '<div class="alerta">La ubicación cae fuera de Antioquia. Verifica las coordenadas.</div>' : "";
     return `
@@ -178,10 +281,11 @@
         <label for="${p}lo"><span>Longitud</span><input id="${p}lo" class="mono" data-k="longitudDMS" value="${esc(r.longitudDMS)}" placeholder="75°9'57&quot;W" inputmode="text"></label>
       </div>
       <div class="coord" data-coord>${lineaCoord(r)}</div>${alerta}
-      <div class="grid grid--2">
-        <label for="${p}cv"><span>Código oficial de la vía ${r.viaAuto ? '<span class="auto">· red vial</span>' : ""}</span><input id="${p}cv" class="mono" data-k="codigoVia" value="${esc(r.codigoVia)}" placeholder="Ej. 60AN17" autocomplete="off" list="lista-vias-cod"></label>
-        <label for="${p}nt"><span>Nombre del tramo ${r.viaAuto ? '<span class="auto">· red vial</span>' : ""}</span><input id="${p}nt" data-k="nombreTramo" value="${esc(r.nombreTramo)}" placeholder="Ej. Medellín - Turbo" autocomplete="off" list="lista-vias-nom"></label>
+      <div class="grid grid--via">
+        <label for="${p}cv"><span>Código oficial de la vía ${r.viaAuto ? '<span class="auto">· red vial</span>' : ""}</span><div class="combo"><input id="${p}cv" class="mono" data-k="codigoVia" value="${esc(r.codigoVia)}" placeholder="Ej. 60AN17" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="${p}vl" aria-expanded="false"><button type="button" class="combo__btn" data-combo aria-label="Ver la lista de vías" title="Ver la lista de vías">▾</button></div></label>
+        <label for="${p}nt"><span>Nombre del tramo ${origenTramo(r)}</span><div class="combo"><input id="${p}nt" data-k="nombreTramo" value="${esc(r.nombreTramo)}" title="${esc(r.nombreTramo)}" placeholder="Escribe o despliega la lista" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="${p}vl" aria-expanded="false"><button type="button" class="combo__btn" data-combo aria-label="Ver la lista de tramos" title="Ver la lista de tramos">▾</button></div></label>
       </div>
+      <div class="combo-lista" id="${p}vl" role="listbox" aria-label="Vías de la red vial" hidden></div>
       <div class="grid grid--2">
         <label for="${p}sr"><span>Subregión ${r.municipioAuto ? '<span class="auto">· automática</span>' : ""}</span><select id="${p}sr" data-k="subregion">${opciones(SUBREGIONES, r.subregion)}</select></label>
         <label for="${p}mu"><span>Municipio <em>*</em> ${r.municipioAuto ? '<span class="auto">· automático</span>' : ""}</span><input id="${p}mu" data-k="municipio" value="${esc(r.municipio)}" list="lista-municipios" placeholder="Escribe el municipio" autocomplete="off" autocapitalize="words"></label>
@@ -197,6 +301,8 @@
   function alEditar(r, el, contenedor, rerender) {
     const k = el.dataset.k; if (!k) return;
     r[k] = el.value;
+    r.editados = r.editados || {};
+    r.editados[k === "latitudDMS" || k === "longitudDMS" ? "coord" : k] = true;
     el.classList.remove("is-invalid");
     if (k === "estadoPunto") el.dataset.v = el.value;
     if (k === "latitudDMS" || k === "longitudDMS") {
@@ -299,7 +405,12 @@
       const c3 = document.createElement("canvas");
       c3.width = Math.round(img.width * l); c3.height = Math.round(img.height * l);
       c3.getContext("2d").drawImage(img, 0, 0, c3.width, c3.height);
-      return { dataUrl, base64: dataUrl.split(",")[1], base64Lectura: c3.toDataURL("image/jpeg", 0.82).split(",")[1], miniatura: c2.toDataURL("image/jpeg", 0.75) };
+      // Recorte de la franja inferior (45 %) a buena resolución: el texto del sello llega grande y nítido a Gemini
+      const y0 = Math.round(img.height * 0.55), hR = img.height - y0, fR = Math.min(3, 2000 / img.width);
+      const c4 = document.createElement("canvas");
+      c4.width = Math.round(img.width * fR); c4.height = Math.round(hR * fR);
+      const x4 = c4.getContext("2d"); x4.imageSmoothingQuality = "high"; x4.drawImage(img, 0, y0, img.width, hR, 0, 0, c4.width, c4.height);
+      return { dataUrl, base64: dataUrl.split(",")[1], base64Lectura: c3.toDataURL("image/jpeg", 0.82).split(",")[1], recorte: c4.toDataURL("image/jpeg", 0.9).split(",")[1], miniatura: c2.toDataURL("image/jpeg", 0.75) };
     } finally { URL.revokeObjectURL(url); }
   }
 
@@ -324,7 +435,7 @@
       if (f.size > maxMB * 1048576) { aviso(f.name + " supera " + maxMB + " MB.", true); continue; }
       let opt;
       try { opt = await optimizar(f); } catch (_) { aviso("No se pudo abrir " + f.name + ".", true); continue; }
-      const r = nuevoRegistro({ origen: "foto", estado: "leyendo", nombreArchivo: f.name, dataUrl: opt.dataUrl, base64: opt.base64, base64Lectura: opt.base64Lectura, miniatura: opt.miniatura,
+      const r = nuevoRegistro({ origen: "foto", estado: "leyendo", nombreArchivo: f.name, dataUrl: opt.dataUrl, base64: opt.base64, base64Lectura: opt.base64Lectura, recorte: opt.recorte, miniatura: opt.miniatura,
         responsable: manual.responsable || "" });
       r.exif = await leerExif(f);
       r.urlOriginal = URL.createObjectURL(f); // el lector usa la foto original: la copia recomprimida borra detalle del sello
@@ -344,94 +455,157 @@
     ocupado = false;
   }
 
+  /* Lectura de una foto.
+     Gemini (IA, en el servidor) es el lector principal: recibe la foto y una ampliación del sello.
+     El lector del navegador trabaja al mismo tiempo y muestra un resultado rápido; cuando llega la IA,
+     corrige todo lo que se llenó solo (nunca lo que la persona escribió). Si las dos lecturas no coinciden,
+     o la IA no está segura, se pide una segunda lectura «precisa» (la IA razona dígito por dígito). */
   let avisoPrimeraVez = true;
+  const deIA = (s) => ({ fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS,
+    tramo: LectorSello.corregirTramo(s.tramo || ""), codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion,
+    seguridad: s.seguridad || "", preciso: !!s.preciso, legible: !!s.selloLegible });
+  function pedirIA(r, preciso) {
+    if (!HAY_BACKEND) return Promise.resolve(null);
+    return Promise.race([
+      Api.post("leer", { base64: r.base64Lectura || r.base64, recorte: r.recorte || "", mimeType: "image/jpeg", preciso: !!preciso })
+        .then((s) => (s.status === "success" ? deIA(s) : null)).catch(() => null),
+      new Promise((ok) => setTimeout(() => ok(null), preciso ? 60000 : 30000)) // máximo 30 s (60 s en la lectura precisa)
+    ]);
+  }
+  const editado = (r, k) => !!(r.editados && r.editados[k]);
+  const metros = (a, b) => Math.hypot((a.latitud - b.latitud) * 110574, (a.longitud - b.longitud) * 111320);
+  function ponerCoords(r, x, de) {
+    r.latitud = x.latitud; r.longitud = x.longitud;
+    r.latitudDMS = x.latitudDMS && /[°NS]/.test(x.latitudDMS) ? x.latitudDMS : decimalADMS(x.latitud, true);
+    r.longitudDMS = x.longitudDMS && /[°WOE]/.test(x.longitudDMS) ? x.longitudDMS : decimalADMS(x.longitud, false);
+    r.origenUbicacion = "sello"; r.coordDe = de;
+  }
+  // Lo que leyó la IA reemplaza lo que se llenó solo. Devuelve true si cambió algo.
+  function aplicarIA(r, x) {
+    if (!x || r.estado === "guardado" || r.estado === "guardando") return false;
+    let cambio = false, coords = false;
+    if (x.fecha && !editado(r, "fecha") && x.fecha !== r.fecha) { r.fecha = x.fecha; r.fechaTexto = x.fechaTexto || ""; cambio = true; }
+    if (x.latitud != null && x.longitud != null && !editado(r, "coord") && (!tieneCoord(r) || metros(x, r) > 5)) { ponerCoords(r, x, "gem"); cambio = coords = true; }
+    if (x.tramo && !editado(r, "nombreTramo") && r.tramoDe !== "lista" && x.tramo !== r.nombreTramo) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; r.viaAuto = false; cambio = true; }
+    if (x.codigoVia && !editado(r, "codigoVia") && r.tramoDe !== "lista" && x.codigoVia !== r.codigoVia) { r.codigoVia = x.codigoVia; cambio = true; }
+    if (x.tipoAfectacion && !editado(r, "tipoAfectacion") && TIPOS_AFECTACION.includes(x.tipoAfectacion) && x.tipoAfectacion !== r.tipoAfectacion) { r.tipoAfectacion = x.tipoAfectacion; cambio = true; }
+    if (x.municipioTexto) r.municipioTexto = x.municipioTexto;
+    if (coords && (r.municipioAuto || !r.municipio)) {
+      const antes = [r.municipio, r.subregion];
+      r.municipio = ""; r.municipioAuto = true; completarDesdeCoordenadas(r);
+      if (!r.municipio) [r.municipio, r.subregion] = antes; // fuera de los límites incluidos: se deja el que tenía
+    }
+    r.leidoPor = x.preciso ? "ia-preciso" : "ia";
+    return cambio || coords;
+  }
+  // Estado de la tarjeta y aviso, según lo que quedó leído
+  function evaluar(r, error) {
+    const dudosa = !!r.coordDudosa && r.origenUbicacion === "sello";
+    const otroMun = r.municipioTexto && r.municipio && norm(r.municipioTexto) !== norm(r.municipio) && r.municipioAuto ? r.municipioTexto : "";
+    const leido = r.fecha && tieneCoord(r) && !dudosa;
+    r.estado = leido ? "listo" : "revisar";
+    r.mensaje = error ? error + " Completa los datos a mano."
+      : dudosa ? (r.avisoDuda || "Verifica las coordenadas: el sello se leyó con dudas. Compáralas con la foto (toca «Ampliar»).")
+      : leido ? (otroMun ? `El sello menciona «${otroMun}» y las coordenadas caen en ${r.municipio}. Revisa el municipio.` : "") : (!tieneCoord(r) && r.fecha && r.municipio
+        ? "La foto no trae coordenadas. El municipio se tomó del texto del sello; agrega las coordenadas si las tienes."
+        : "No se leyó todo el sello. Completa " + [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas"].filter(Boolean).join(" y ") + ".");
+  }
+  // ¿Hace falta una segunda lectura precisa? (la IA no leyó todo, no está segura o no coincide con el lector del navegador)
+  function hayQueVerificar(gem, ocr) {
+    if (!gem) return false;
+    if (gem.preciso) return false;
+    if (gem.latitud == null || !gem.fecha) return true;
+    if (gem.seguridad === "baja") return true;
+    if (ocr && ocr.latitud != null && !ocr.coordDudosa && metros(gem, ocr) > 100) return true;
+    if (ocr && ocr.fecha && ocr.fecha !== gem.fecha) return true;
+    return false;
+  }
+  async function verificarIA(r, gem, ocr) {
+    if (!hayQueVerificar(gem, ocr) || r.estado === "guardado" || r.estado === "guardando") return;
+    r.confirmandoIA = true; actualizar(r);
+    const x = await pedirIA(r, true);
+    r.confirmandoIA = false;
+    if (x && (x.latitud != null || x.fecha)) {
+      const otra = gem.latitud != null && x.latitud != null && metros(gem, x) > 100 && !(ocr && ocr.latitud != null && metros(ocr, x) < 100);
+      r.coordDudosa = otra; // dos lecturas de la IA muy distintas y el lector no confirma ninguna: que la persona la revise
+      r.avisoDuda = otra ? "Verifica las coordenadas: la IA leyó dos valores distintos en el sello. Compáralas con la foto (toca «Ampliar»)." : "";
+      if (aplicarIA(r, x)) enriquecer(r, () => actualizar(r));
+    }
+    evaluar(r, ""); repintarSinPerderFoco(r, () => actualizar(r));
+  }
+
   async function leer(r) {
-    r.estado = "leyendo"; actualizar(r);
-    // Gemini (servidor) y el lector del navegador trabajan al mismo tiempo: se usa el primero que lea
-    // el sello completo (fecha y coordenadas) y el otro solo completa lo que falte.
+    r.estado = "leyendo"; r.confirmandoIA = false; r.leidoPor = ""; actualizar(r);
+    const preciso = !!r.releerPreciso; r.releerPreciso = false; // «Volver a leer la foto» va directo a la lectura precisa
     let error = "";
     const completo = (x) => !!(x && x.fecha && x.latitud != null && !x.coordDudosa);
-    const pGem = !HAY_BACKEND ? Promise.resolve(null) : Promise.race([
-      Api.post("leer", { base64: r.base64Lectura || r.base64, mimeType: "image/jpeg" }).then((s) => s.status === "success"
-        ? { fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS, tramo: LectorSello.corregirTramo(s.tramo || ""), codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion }
-        : null).catch(() => null),
-      new Promise((ok) => setTimeout(() => ok(null), 30000)) // máximo 30 s esperando a Gemini
-    ]);
+    const pGem = pedirIA(r, preciso);
     if (avisoPrimeraVez) { aviso("Preparando el lector de fotos. La primera vez tarda unos segundos."); avisoPrimeraVez = false; }
     const pOcr = LectorSello.leer(r.urlOriginal || r.dataUrl).catch((e) => { error = e.message || "No se pudo leer la foto."; return null; }).finally(() => aviso(""));
     const sinVacios = (x) => Object.fromEntries(Object.entries(x || {}).filter(([, v]) => v != null && v !== ""));
     const primero = await Promise.race([pGem.then((x) => ["gem", x]), pOcr.then((x) => ["ocr", x])]);
-    const primeroFue = completo(primero[1]) ? primero[0] : "mezcla";
-    let d, tarde = null;
+    let d, gem = null, ocr = null, falta = null;
     if (completo(primero[1])) {
       d = primero[1];
-      tarde = primero[0] === "gem" ? pOcr : pGem; // el otro llega después y completa lo que falte
+      if (primero[0] === "gem") { gem = d; falta = pOcr; } else { ocr = d; falta = pGem; }
     } else {
       const otro = await (primero[0] === "gem" ? pOcr : pGem);
-      const gem = primero[0] === "gem" ? primero[1] : otro, ocr = primero[0] === "gem" ? otro : primero[1];
-      d = (gem || ocr) ? Object.assign({}, ocr || {}, sinVacios(gem)) : null; // como antes: Gemini manda sobre el lector
+      gem = primero[0] === "gem" ? primero[1] : otro; ocr = primero[0] === "gem" ? otro : primero[1];
+      d = (gem || ocr) ? Object.assign({}, ocr || {}, sinVacios(gem)) : null; // Gemini manda sobre el lector
     }
-    if (tarde) tarde.then((x) => {
-      if (!x || r.estado === "guardado" || r.estado === "guardando") return;
-      let cambio = false;
-      if (x.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(x.tipoAfectacion)) { r.tipoAfectacion = x.tipoAfectacion; cambio = true; }
-      if (x.codigoVia && !r.codigoVia) { r.codigoVia = x.codigoVia; cambio = true; }
-      // Gemini lee el nombre del tramo mejor que el lector del navegador: si el tramo salió del lector y nadie lo ha cambiado, se reemplaza
-      if (x.tramo && (!r.nombreTramo || (r.tramoDe === "ocr" && x.tramo !== r.nombreTramo))) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; cambio = true; }
-      // Coordenadas: si las leyó el lector del navegador y Gemini las lee distinto, se confía en Gemini (salvo que la persona las haya cambiado)
-      if (x.latitud != null && x.longitud != null && r.coordDe === "ocr" && r.origenUbicacion === "sello" &&
-          Math.hypot((x.latitud - r.latitud) * 110574, (x.longitud - r.longitud) * 111320) > 5 && primeroFue === "ocr") {
-        r.latitud = x.latitud; r.longitud = x.longitud;
-        r.latitudDMS = x.latitudDMS && /[°NS]/.test(x.latitudDMS) ? x.latitudDMS : decimalADMS(x.latitud, true);
-        r.longitudDMS = x.longitudDMS && /[°WOE]/.test(x.longitudDMS) ? x.longitudDMS : decimalADMS(x.longitud, false);
-        r.coordDe = "gem"; cambio = true;
-        enriquecer(r, () => actualizar(r));
-      }
-      if (cambio) repintarSinPerderFoco(r, () => actualizar(r));
-    });
     d = d || {};
+    const deGem = !!gem && (d === gem || !ocr || completo(gem));
     if (d.fecha) { r.fecha = d.fecha; r.fechaTexto = d.fechaTexto || ""; }
-    if (d.latitud != null && d.longitud != null) {
-      r.latitud = d.latitud; r.longitud = d.longitud;
-      r.latitudDMS = d.latitudDMS && /[°NS]/.test(d.latitudDMS) ? d.latitudDMS : decimalADMS(d.latitud, true);
-      r.longitudDMS = d.longitudDMS && /[°WOE]/.test(d.longitudDMS) ? d.longitudDMS : decimalADMS(d.longitud, false);
-      r.origenUbicacion = "sello"; r.coordDe = primeroFue === "gem" ? "gem" : "ocr";
-    } else if (r.exif && r.exif.lat != null) {
+    if (d.latitud != null && d.longitud != null) ponerCoords(r, d, deGem ? "gem" : "ocr");
+    else if (r.exif && r.exif.lat != null) {
       r.latitud = r.exif.lat; r.longitud = r.exif.lon;
       r.latitudDMS = decimalADMS(r.latitud, true); r.longitudDMS = decimalADMS(r.longitud, false);
       r.origenUbicacion = "gps";
     }
     if (!r.fecha && r.exif && r.exif.fecha) r.fecha = r.exif.fecha;
-    if (d.tramo && !r.nombreTramo) { r.nombreTramo = d.tramo; r.tramoDe = primero && primero[0] === "gem" && completo(primero[1]) ? "gem" : "ocr"; }
-    // Tramo leído por el lector del navegador: se corrige con el nombre más parecido de la red vial (Circular 10)
-    if (r.tramoDe === "ocr" && typeof Capas !== "undefined") Capas.nombreParecido(r.nombreTramo, 0.7).then((v) => {
-      if (!v || r.tramoDe !== "ocr" || r.estado === "guardado" || r.estado === "guardando") return;
-      r.nombreTramo = v.nombre; r.tramoDe = "redvial";
-      if (!r.codigoVia) r.codigoVia = v.codigo;
-      repintarSinPerderFoco(r, () => actualizar(r));
-    }).catch(() => {});
+    if (d.tramo && (!r.nombreTramo || r.tramoDe === "ocr" || r.tramoDe === "gem")) { r.nombreTramo = d.tramo; r.tramoDe = gem && gem.tramo === d.tramo ? "gem" : "ocr"; }
     if (d.codigoVia && !r.codigoVia) r.codigoVia = d.codigoVia;
     if (d.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(d.tipoAfectacion)) r.tipoAfectacion = d.tipoAfectacion;
+    r.coordDudosa = !!d.coordDudosa && !deGem;
+    r.municipioTexto = d.municipioTexto || "";
     completarDesdeCoordenadas(r);
     // Sin coordenadas: municipio por el nombre escrito en el sello (ej. "Grada el peñol" → El Peñol)
     if ((!r.municipio || r.municipioAuto) && !tieneCoord(r) && d.municipioTexto) {
       const m = MUN_POR_NOMBRE[norm(d.municipioTexto)];
       if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
     }
-
-    const dudosa = !!d.coordDudosa && r.origenUbicacion === "sello";
-    // El sello nombra un municipio distinto al de las coordenadas: se avisa (los límites usados son aproximados)
-    const otroMun = d.municipioTexto && r.municipio && norm(d.municipioTexto) !== norm(r.municipio) && r.municipioAuto ? d.municipioTexto : "";
-    const leido = r.fecha && tieneCoord(r) && !dudosa;
     r.selloLegible = !!(d.fecha && d.latitud != null);
-    r.estado = leido ? "listo" : "revisar";
-    r.mensaje = error ? error + " Completa los datos a mano."
-      : dudosa ? "Verifica las coordenadas: el sello se leyó con dudas. Compáralas con la foto (toca «Ampliar»)."
-      : leido ? (otroMun ? `El sello menciona «${otroMun}» y las coordenadas caen en ${r.municipio}. Revisa el municipio.` : "") : (!tieneCoord(r) && r.fecha && r.municipio
-        ? "La foto no trae coordenadas. El municipio se tomó del texto del sello; agrega las coordenadas si las tienes."
-        : "No se leyó todo el sello. Completa " + [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas"].filter(Boolean).join(" y ") + ".");
+    r.leidoPor = deGem ? (gem.preciso ? "ia-preciso" : "ia") : (ocr ? "lector" : "");
+    r.confirmandoIA = !!falta && primero[0] === "ocr"; // se muestra lo del lector mientras llega la IA
+    evaluar(r, error);
     actualizar(r);
     enriquecer(r, () => actualizar(r));
+    // Tramo leído solo por el lector del navegador: se corrige con el nombre más parecido de la red vial (Circular 10)
+    const corregirConRed = () => { if (r.tramoDe === "ocr" && typeof Capas !== "undefined") Capas.nombreParecido(r.nombreTramo, 0.7).then((v) => {
+      if (!v || r.tramoDe !== "ocr" || r.estado === "guardado" || r.estado === "guardando") return;
+      r.nombreTramo = v.nombre; r.tramoDe = "redvial";
+      if (!r.codigoVia) r.codigoVia = v.codigo;
+      repintarSinPerderFoco(r, () => actualizar(r));
+    }).catch(() => {}); };
+    if (!falta) { corregirConRed(); verificarIA(r, gem, ocr); return; }
+    // El segundo lector termina en segundo plano: la siguiente foto de la cola empieza ya
+    falta.then((x) => {
+    if (r.estado === "guardado" || r.estado === "guardando") return;
+    if (primero[0] === "ocr") {
+      // Llegó la IA después del lector: manda la IA
+      r.confirmandoIA = false; gem = x;
+      if (x) { r.coordDudosa = false; if (aplicarIA(r, x)) enriquecer(r, () => actualizar(r)); }
+      else corregirConRed();
+    } else {
+      // Llegó el lector después de la IA: solo completa lo que falte
+      ocr = x;
+      if (x && x.codigoVia && !r.codigoVia) r.codigoVia = x.codigoVia;
+      if (x && x.tramo && !r.nombreTramo) { r.nombreTramo = x.tramo; r.tramoDe = "ocr"; corregirConRed(); }
+    }
+    evaluar(r, x || gem ? "" : error);
+    repintarSinPerderFoco(r, () => actualizar(r));
+    verificarIA(r, gem, ocr);
+    });
   }
 
   function aviso(texto, error) {
@@ -468,8 +642,9 @@
   function pintarPdf() {
     const r = regPdf();
     // Mientras se leen las fotos del PDF, un tramo sin coordenadas no es un error todavía: se avisa que espere
-    const esperando = pdfActual && pdfActual.leyendoFotos && !tieneCoord(r) && r.mensaje && /coordenadas/.test(r.mensaje);
-    formPdf.innerHTML = (esperando ? '<div class="info"><span class="girando" aria-hidden="true"></span>Leyendo las imágenes del PDF para encontrar las coordenadas. Por favor espera unos segundos…</div>'
+    const esperando = pdfActual && pdfActual.leyendoFotos && r.mensaje && /coordenadas|fecha/.test(r.mensaje);
+    const falta = [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas"].filter(Boolean).join(" y ") || "los datos";
+    formPdf.innerHTML = (esperando ? `<div class="info"><span class="girando" aria-hidden="true"></span>Leyendo las imágenes del PDF para encontrar ${falta}. Por favor espera unos segundos…</div>`
       : r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : "") + campos(r, "p-");
     const t = $("#p-tramos");
     t.hidden = tramosPdf.length < 2;
@@ -584,7 +759,7 @@
     if (g.resumen) d.resumen = g.resumen;
     tramosPdf.forEach((r) => {
       if (!r.agregado && (!r.observaciones || r.observaciones === resumenAnterior)) r.observaciones = d.resumen;
-      if (!r.fecha) r.fecha = d.fecha; if (!r.codigoVia) r.codigoVia = d.codigoVia; if (!r.nombreTramo) r.nombreTramo = d.via;
+      if (!r.fecha) r.fecha = d.fecha; if (!r.codigoVia) r.codigoVia = d.codigoVia; if (!r.nombreTramo && d.via) { r.nombreTramo = d.via; r.tramoDe = "gem"; }
     });
     // Gemini entiende cualquier formato de PDF: sus sitios que no estén ya en la lista se agregan.
     // Un sitio sin coordenadas ni PR solo se agrega si el lector del navegador no encontró ningún sitio.
@@ -593,6 +768,7 @@
       const limpiarPr = (x) => LectorPDF.prDe("pr" + String(x || "").replace(/^\s*(pr|k|km)\.?\s*/i, ""));
       await sumarPuntosPdf(pdf, d, g.puntos
         .map((p, k) => ({ lat: p.latitud, lon: p.longitud, pr: limpiarPr(p.pr), fecha: p.fecha || "", nombre: p.nombre || "Punto " + (k + 1),
+          via: LectorSello.corregirTramo(p.via || ""), codigoVia: p.codigoVia || "", municipio: p.municipio || "",
           tipo: p.tipoAfectacion || "", descripcion: p.descripcion || "", pagina: p.pagina || 1, deGemini: true }))
         .filter((p) => (p.lat != null && p.lon != null) || p.pr || !hayLocales));
     }
@@ -614,11 +790,15 @@
     const r = nuevoRegistro({
       origen: "pdf", estado: "listo", nombreArchivo: pdf.nombre, punto: p.nombre, pagina: pag, pdf,
       dataUrl: p.foto || cache[pag].grande, miniatura: p.foto || cache[pag].mini,
-      fecha: p.fecha || d.fecha || "", fechaTexto: d.fechaTexto || "", codigoVia: d.codigoVia || "", nombreTramo: d.via || "",
+      fecha: p.fecha || d.fecha || "", fechaTexto: d.fechaTexto || "", codigoVia: p.codigoVia || d.codigoVia || "", nombreTramo: p.via || d.via || "",
+      tramoDe: p.via || d.via ? "pdf" : "",
       tipoAfectacion: "", responsable: "",
       observaciones: (p.pr || p.deGemini) && p.descripcion ? p.descripcion : (d.resumen || p.descripcion || ""), // sitio con su propio texto
       pr: p.pr || ""
     });
+    // Municipio escrito en la fila del punto: lo dice el documento, no se cambia solo
+    const mDoc = p.municipio && MUN_POR_NOMBRE[norm(p.municipio)];
+    if (mDoc) { r.municipio = mDoc.n; r.subregion = mDoc.s; r.municipioAuto = false; r.municipioDoc = true; }
     if (p.lat != null && p.lon != null) {
       r.latitud = p.lat; r.longitud = p.lon;
       r.latitudDMS = decimalADMS(p.lat, true); r.longitudDMS = decimalADMS(p.lon, false);
@@ -630,7 +810,7 @@
       if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
     }
     const falta = [!r.fecha && "la fecha", !tieneCoord(r) && "las coordenadas"].filter(Boolean);
-    const otroMun = tieneCoord(r) && enTexto.length && !enTexto.some((m) => m.n === r.municipio)
+    const otroMun = !mDoc && tieneCoord(r) && enTexto.length && !enTexto.some((m) => m.n === r.municipio)
       ? `El acta menciona ${enTexto.map((m) => m.n).join(" / ")} y las coordenadas caen en ${r.municipio || "otro municipio"}. Revisa el municipio.` : "";
     r.mensaje = falta.length ? "No se encontró en el PDF " + falta.join(", ") + ". Complétalo a mano." : otroMun;
     enriquecer(r, () => { if (regPdf() === r) pintarPdf(); });
@@ -654,43 +834,53 @@
     completarDesdeCoordenadas(r);
     if (!r.fecha && p.fecha) r.fecha = p.fecha;
     if (p.foto) { r.dataUrl = p.foto; r.miniatura = p.foto; r.fotoPropia = true; }
+    completarTramo(r, Object.assign({}, p, { foto: "" }));
     r.mensaje = !r.fecha ? "No se encontró en el PDF la fecha. Complétala a mano." : "";
     enriquecer(r, () => { if (regPdf() === r) pintarPdf(); });
+  }
+  // Completa lo que le falte a un tramo con los datos de otra lectura (Gemini, foto o tabla). Nunca pisa lo que ya tiene.
+  const codNorm = (c) => String(c || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  function completarTramo(r, p) {
+    let c = false;
+    if (!r.fecha && p.fecha) { r.fecha = p.fecha; c = true; }
+    if (p.foto && !r.fotoPropia) { r.dataUrl = p.foto; r.miniatura = p.foto; r.fotoPropia = true; c = true; }
+    if (!String(r.nombreTramo).trim() && p.via) { r.nombreTramo = p.via; r.tramoDe = p.deGemini ? "gem" : "pdf"; c = true; }
+    if (!String(r.codigoVia).trim() && p.codigoVia) { r.codigoVia = p.codigoVia; c = true; }
+    if (!r.pr && p.pr) { r.pr = p.pr; c = true; }
+    if ((!r.municipio || r.municipioAuto) && !tieneCoord(r) && p.municipio) {
+      const m = MUN_POR_NOMBRE[norm(p.municipio)]; if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; c = true; }
+    }
+    if (c && r.fecha && /fecha/.test(r.mensaje || "") && tieneCoord(r)) r.mensaje = "";
+    return c;
   }
   async function sumarPuntosPdf(pdf, d, puntos) {
     let nuevos = 0, completados = 0;
     const afectados = [];
     for (const p of puntos) {
       if (pdfActual !== pdf) return { nuevos, completados, afectados };
-      // Foto con PR en el sello (ej. «pr18+200»): va a la sección de ese PR
-      const mismoPr = p.pr && tramosPdf.find((r) => r.pr && r.pr === p.pr && !r.agregado);
-      if (mismoPr && p.lat == null) { // mismo PR sin coordenadas: solo completa lo que falte
+      // 1) Ya hay un tramo a menos de 80 m (con la misma abscisa, si las dos la tienen): solo se completa
+      const cerca = p.lat != null && tramosPdf.find((r) => tieneCoord(r) && distanciaM({ lat: r.latitud, lon: r.longitud }, p) < 80 && (!p.pr || !r.pr || r.pr === p.pr));
+      if (cerca) {
+        if (!cerca.agregado) { if (completarTramo(cerca, p)) completados++; afectados.push(cerca); }
         continue;
       }
-      if (mismoPr && p.lat != null) {
-        if (!tieneCoord(mismoPr)) { ponerCoordsTramo(mismoPr, p); completados++; afectados.push(mismoPr); }
+      // 2) Misma abscisa PR (y misma vía, si las dos la traen): va a ese tramo (ej. foto con «pr18+200» en el sello)
+      const mismoPr = p.pr && tramosPdf.find((r) => r.pr && r.pr === p.pr && !r.agregado && (!p.codigoVia || !r.codigoVia || codNorm(r.codigoVia) === codNorm(p.codigoVia)));
+      if (mismoPr) {
+        if (p.lat != null && !tieneCoord(mismoPr)) { ponerCoordsTramo(mismoPr, p); completados++; }
+        else if (completarTramo(mismoPr, p)) completados++;
+        afectados.push(mismoPr);
         continue;
       }
-      // Foto sin PR legible en un informe por secciones: va a la sección en cuya página (o después) aparece la foto
+      // 3) Foto sin PR legible en un informe por secciones: va a la sección en cuya página (o después) aparece la foto
       const secciones = tramosPdf.filter((r) => r.pr && !r.agregado);
-      if (!p.pr && p.lat != null && secciones.length && !tramosPdf.some((r) => tieneCoord(r) && distanciaM({ lat: r.latitud, lon: r.longitud }, p) < 80)) {
+      if (!p.pr && p.lat != null && secciones.length) {
         const previas = secciones.filter((r) => !tieneCoord(r) && (r.pagina || 1) <= (p.pagina || 1));
         const sec = previas.sort((a, b) => (b.pagina || 1) - (a.pagina || 1))[0];
         if (sec) { ponerCoordsTramo(sec, p); completados++; afectados.push(sec); }
         continue; // en informes por secciones no se crean puntos sueltos por cada foto
       }
-      const cerca = p.lat != null && tramosPdf.find((r) => tieneCoord(r) && distanciaM({ lat: r.latitud, lon: r.longitud }, p) < 80);
-      if (cerca) {
-        if (!cerca.agregado) {
-          let c = false;
-          if (!cerca.fecha && p.fecha) { cerca.fecha = p.fecha; c = true; }
-          if (p.foto && !cerca.fotoPropia) { cerca.dataUrl = p.foto; cerca.miniatura = p.foto; cerca.fotoPropia = true; c = true; }
-          if (c) { cerca.mensaje = /fecha/.test(cerca.mensaje || "") && cerca.fecha ? "" : cerca.mensaje; completados++; }
-          afectados.push(cerca);
-        }
-        continue;
-      }
-      // El tramo «Acta» sin coordenadas se reemplaza por el primer punto real
+      // 4) Punto nuevo. El tramo «Acta» sin coordenadas se reemplaza por el primer punto real
       const vacio = tramosPdf.findIndex((r) => r.esActa && !r.agregado);
       const r = await crearTramo(pdf, d, p);
       if (p.foto) r.fotoPropia = true;
@@ -732,7 +922,7 @@
   // cada foto se aplica con el primer resultado confiable, y si Gemini lee distinto al lector, manda Gemini.
   async function leerFotosPdfInterno(pdf, d) {
     let fotos = [];
-    try { fotos = await LectorPDF.imagenes(pdf.doc, 16, 300); } catch (_) { return; }
+    try { fotos = await LectorPDF.imagenes(pdf.doc, 60, 240); } catch (_) { return; }
     if (!fotos.length || pdfActual !== pdf) return;
     const aviso3 = (t) => { $("#p-fotos").hidden = !t; $("#p-fotos").textContent = t || ""; };
     const aplicado = {};            // índice de foto → { fuente, lat, lon, tramo }
@@ -741,7 +931,7 @@
       cola = cola.then(async () => {
         if (pdfActual !== pdf) return;
         const f = fotos[i], prev = aplicado[i];
-        const p = { lat: x.lat, lon: x.lon, fecha: x.fecha || "", pr: x.pr || "", foto: f.dataUrl, pagina: f.pagina,
+        const p = { lat: x.lat, lon: x.lon, fecha: x.fecha || "", pr: x.pr || "", via: x.via || "", foto: f.dataUrl, pagina: f.pagina,
           nombre: x.pr ? "PR " + x.pr : "Foto pág. " + f.pagina, tipo: "", descripcion: "" };
         if (prev) {
           // Ya se aplicó con el lector del navegador: si Gemini lee otra posición, se corrige ese tramo
@@ -770,7 +960,7 @@
           geminiOk = true;
           for (const x of g.fotos) {
             const i = ini + Number(x.indice);
-            if (fotos[i] && x.legible && x.esFoto !== false) await aplicar(i, { lat: x.latitud, lon: x.longitud, fecha: x.fecha, pr: prDe(x.pr) }, "gemini");
+            if (fotos[i] && x.legible && x.esFoto !== false) await aplicar(i, { lat: x.latitud, lon: x.longitud, fecha: x.fecha, pr: prDe(x.pr), via: LectorSello.corregirTramo(x.tramo || "") }, "gemini");
           }
         }));
       } catch (_) { geminiFallo = true; }
@@ -783,14 +973,14 @@
       for (let i = 0; i < fotos.length; i++) {
         if (pdfActual !== pdf) return;
         // Si Gemini ya terminó y todos los tramos tienen coordenadas, no hace falta seguir leyendo
-        if (geminiTerminado && geminiOk && tramosPdf.every((r) => tieneCoord(r) || r.agregado)) break;
+        if (geminiTerminado && geminiOk && tramosPdf.every((r) => (tieneCoord(r) && r.fecha) || r.agregado)) break;
         if (aplicado[i]) continue;
         aviso3(`· Leyendo las imágenes del PDF (${i + 1} de ${fotos.length})…`);
         let o = null;
         try { o = await LectorSello.leer(fotos[i].dataUrl, { rapido: true }); } catch (_) {}
         // Solo sellos de foto de campo: fecha + coordenadas, sin dudas de lectura
         if (!(o && o.latitud != null && o.longitud != null && o.fecha) || aplicado[i]) continue;
-        const x = { i, lat: o.latitud, lon: o.longitud, fecha: o.fecha, pr: LectorPDF.prDe(o.textoLeido), dudosa: !!o.coordDudosa };
+        const x = { i, lat: o.latitud, lon: o.longitud, fecha: o.fecha, pr: LectorPDF.prDe(o.textoLeido), via: o.tramo || "", dudosa: !!o.coordDudosa };
         // En fotos pequeñas el lector puede confundir un número: se acepta si la foto es grande o si otra foto coincide.
         // Una lectura dudosa (separadores perdidos, ej. «6853 N 7546 W») solo cuenta si otra foto del MISMO PR coincide (< 100 m).
         const grande = Math.max(fotos[i].ancho, fotos[i].alto) >= 1000 && !x.dudosa;
@@ -810,18 +1000,20 @@
     aviso3("");
     if (pdfActual !== pdf) return;
     const sinCoord = tramosPdf.filter((r) => !tieneCoord(r) && !r.agregado).length;
+    const sinFecha = tramosPdf.filter((r) => !r.fecha && !r.agregado).length;
     msgPdf(`Imágenes del PDF: ${fotos.length} revisadas, ${conCoord} con sello y coordenadas` +
       (sinCoord ? `. ${sinCoord} tramo(s) siguen sin coordenadas: complétalas a mano.` : ". Todos los tramos tienen coordenadas.") +
-      (HAY_BACKEND && geminiFallo && !geminiOk ? " (Gemini no respondió: se usó solo el lector del navegador.)" : ""), sinCoord > 0);
+      (sinFecha ? ` ${sinFecha} sin fecha: complétala a mano.` : "") +
+      (HAY_BACKEND && geminiFallo && !geminiOk ? " (Gemini no respondió: se usó solo el lector del navegador.)" : ""), sinCoord > 0 || sinFecha > 0);
   }
   pintarPdf();
 
   /* ======================= Tarjetas ======================= */
-  const ETIQUETAS = { leyendo: "Leyendo…", listo: "Listo", revisar: "Revisar", guardando: "Guardando…", guardado: "Guardado", error: "Error al guardar", manual: "Carga manual" };
+  const ETIQUETAS = { leyendo: "Leyendo…", listo: "Listo", revisar: "Revisar", guardando: "Guardando…", guardado: "Guardado", error: "Error al guardar", manual: "Carga manual", eliminado: "Eliminado" };
 
   function tarjeta(r) {
     const esFoto = r.origen === "foto", esPdf = r.origen === "pdf", conImagen = !!r.miniatura;
-    const bloqueado = r.estado === "guardado" || r.estado === "guardando" || r.estado === "leyendo";
+    const bloqueado = r.estado === "guardado" || r.estado === "guardando" || r.estado === "leyendo" || r.estado === "eliminado";
     const cls = ["card", conImagen ? "" : "is-manual", r.estado === "guardado" ? "is-guardado" : "", r.estadoPunto === "Crítico" ? "is-critico" : ""].join(" ");
     const porVerificar = r.enLista && ["listo", "revisar", "error"].includes(r.estado);
     const etiqueta = porVerificar && r.estado !== "error" ? (r.verificado ? "Verificado" : "Por verificar")
@@ -832,11 +1024,14 @@
       <div class="card__cuerpo">
         <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
+        ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}">${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
+          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: HAY_BACKEND ? "Leído con el lector del navegador (la IA no respondió)" : "Leído con el lector del navegador" }[r.leidoPor] || ""}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">
           ${esFoto && !r.enLista && ["listo", "revisar", "error"].includes(r.estado) ? '<button type="button" class="btn btn--sm btn--primary" data-act="agregar">Agregar a la lista</button>' : ""}
           ${esFoto && r.estado !== "guardado" && r.estado !== "leyendo" && r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="releer">Volver a leer la foto</button>' : ""}
+          ${HAY_BACKEND && r.estado === "guardado" && r.idRegistro && !String(r.idRegistro).startsWith("L-") ? '<button type="button" class="btn btn--sm btn--peligro" data-act="eliminar">Eliminar punto</button>' : ""}
           ${r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="quitar">Quitar de la lista</button>' : ""}
         </div>
       </div>
@@ -898,9 +1093,74 @@
       msgF(r.nombreArchivo + " agregada a «Registros»: revísalo, marca «Verifiqué la información» y toca «Guardar datos».");
       return;
     }
-    if (b.dataset.act === "releer") { cola.push(r); r.estado = "leyendo"; actualizar(r); procesarCola(); }
+    if (b.dataset.act === "eliminar") { pedirEliminar({ id: r.idRegistro, fid: r.idArcgis || "", municipio: r.municipio, tramo: r.nombreTramo || r.codigoVia }); return; }
+    if (b.dataset.act === "releer") { r.releerPreciso = true; cola.push(r); r.estado = "leyendo"; actualizar(r); procesarCola(); }
     if (b.dataset.act === "ver") abrirVisor(r.dataUrl || r.miniatura, r.nombreArchivo + (r.punto ? " · " + r.punto + (r.pagina ? " (página " + r.pagina + ")" : "") : ""));
   });
+  });
+
+  /* ======================= 4. Puntos guardados · eliminar en ArcGIS ======================= */
+  // Lista los puntos ya guardados (del Sheet) y permite eliminarlos de la capa de ArcGIS.
+  // El servidor decide quién puede: administradores, cualquiera; los demás, solo los que registraron.
+  let puntosG = [], adminG = false;
+  const msgG = (t, e) => { const m = $("#g-msg"); m.textContent = t || ""; m.style.color = e ? "var(--err)" : ""; };
+  async function cargarPuntos() {
+    if (!HAY_BACKEND) { msgG("Conecta el servidor para ver los puntos guardados.", true); return; }
+    const b = $("#g-cargar"); b.disabled = true; msgG("Cargando los puntos guardados…");
+    const r = await Api.post("puntos", { buscar: $("#g-buscar").value.trim() });
+    b.disabled = false; b.textContent = "Actualizar";
+    if (r.status !== "success") { msgG(r.message || "No se pudieron cargar los puntos.", true); return; }
+    puntosG = r.puntos || []; adminG = !!r.admin;
+    pintarPuntos();
+    msgG(puntosG.length ? `${puntosG.length} punto(s)${adminG ? " · eres administrador: ves los de todos" : " registrados por ti"}${puntosG.length >= 150 ? " · se muestran los 150 más recientes: busca para ver otros" : ""}.` : "No hay puntos guardados" + ($("#g-buscar").value.trim() ? " con esa búsqueda." : "."));
+  }
+  function pintarPuntos() {
+    $("#g-lista").innerHTML = puntosG.map((p, i) => `<article class="punto-g">
+      <div class="punto-g__datos">
+        <b class="mono">${esc(p.id)}</b>${p.fecha ? ` · ${esc(p.fecha.split("-").reverse().join("/"))}` : ""}${p.municipio ? ` · ${esc(p.municipio)}` : ""}
+        <span>${esc([p.tramo, p.codigo && "(" + p.codigo + ")"].filter(Boolean).join(" ") || "Sin vía")}</span>
+        <small>${esc(p.tipo || "")}${p.fid ? ` · ArcGIS FID ${esc(p.fid)}` : " · no llegó a ArcGIS"}${adminG && p.por ? ` · registró ${esc(p.por)}` : ""}</small>
+      </div>
+      <div class="punto-g__acc">
+        ${p.latitud != null && p.longitud != null ? `<a class="btn btn--sm btn--ghost" href="https://www.google.com/maps?q=${p.latitud},${p.longitud}" target="_blank" rel="noopener">Ubicación</a>` : ""}
+        ${/^https:\/\/(drive|docs)\.google\.com\//.test(p.url || "") ? `<a class="btn btn--sm btn--ghost" href="${esc(p.url)}" target="_blank" rel="noopener">Archivo</a>` : ""}
+        <button type="button" class="btn btn--sm btn--peligro" data-eliminar="${i}">Eliminar</button>
+      </div>
+    </article>`).join("");
+  }
+  $("#g-form").addEventListener("submit", (e) => { e.preventDefault(); cargarPuntos(); });
+  $("#g-lista").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-eliminar]"); if (!b) return;
+    const p = puntosG[Number(b.dataset.eliminar)];
+    if (p) pedirEliminar({ id: p.id, fid: p.fid, municipio: p.municipio, tramo: p.tramo || p.codigo });
+  });
+
+  const dlgEl = $("#dlg-eliminar");
+  let porEliminar = null;
+  function pedirEliminar(d) {
+    porEliminar = d;
+    $("#de-texto").innerHTML = `Se borrará el punto <b>${esc(d.id || "FID " + d.fid)}</b>${d.municipio || d.tramo ? " (" + esc([d.municipio, d.tramo].filter(Boolean).join(" · ")) + ")" : ""} de la capa de ArcGIS y el registro quedará como <b>ELIMINADO</b> en el Sheet. ` +
+      "Se guarda una copia completa en la hoja «Eliminados», por si hay que restaurarlo.";
+    $("#de-motivo").value = ""; $("#de-msg").textContent = ""; $("#de-confirmar").disabled = false; $("#de-confirmar").textContent = "Eliminar de ArcGIS";
+    if (dlgEl.showModal) dlgEl.showModal();
+    setTimeout(() => { try { $("#de-motivo").focus(); } catch (_) {} }, 50);
+  }
+  $("#de-cancelar").addEventListener("click", () => dlgEl.close());
+  $("#de-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const motivo = $("#de-motivo").value.trim();
+    if (motivo.length < 3) { $("#de-msg").textContent = "Escribe el motivo de la eliminación."; $("#de-motivo").focus(); return; }
+    const d = porEliminar; if (!d) return;
+    const b = $("#de-confirmar"); b.disabled = true; b.textContent = "Eliminando…"; $("#de-msg").textContent = "";
+    const r = await Api.post("eliminar", { id: d.id || "", fid: d.id ? "" : d.fid, motivo });
+    b.disabled = false; b.textContent = "Eliminar de ArcGIS";
+    if (r.status !== "success") { $("#de-msg").textContent = r.message || "No se pudo eliminar."; return; }
+    dlgEl.close();
+    puntosG = puntosG.filter((p) => !(d.id ? p.id === d.id : p.fid === d.fid)); pintarPuntos();
+    const enSesion = items.find((x) => d.id && x.idRegistro === d.id);
+    if (enSesion) { enSesion.estado = "eliminado"; enSesion.mensaje = "Eliminado de ArcGIS. Motivo: " + motivo; actualizar(enSesion); contadores(); }
+    const texto = `Punto ${d.id || "FID " + d.fid} ${r.arcgis === "eliminado" ? "eliminado de ArcGIS" : "marcado como eliminado (" + r.arcgis + ")"}. La copia quedó en la hoja «Eliminados».`;
+    msgG(texto); aviso(texto);
   });
 
   /* ======================= Visor ======================= */

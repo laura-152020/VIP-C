@@ -53,7 +53,7 @@ const LectorPDF = (function () {
 
   // Palabras clave → tipo de afectación (deben coincidir con la lista de app.js)
   const CLAVES = [
-    ["Pérdida de banca", /p[eé]rdida\s+(?:parcial\s+|total\s+)?(?:de\s+)?(?:la\s+)?banca|banca\s+perdida/],
+    ["Pérdida de banca", /p[eé]rdidas?\s+(?:parcial(?:es)?\s+|total(?:es)?\s+)?(?:de\s+)?(?:la\s+)?banca|banca\s+perdida/],
     ["Deslizamiento / movimiento en masa", /deslizamiento|movimiento\s+en\s+masa|remoci[oó]n\s+en\s+masa/],
     ["Hundimiento de la vía", /hundimiento|asentamiento\s+de\s+la\s+(?:v[ií]a|banca|calzada)/],
     ["Caída de rocas", /ca[ií]da\s+de\s+rocas|desprendimiento\s+de\s+rocas/],
@@ -66,7 +66,8 @@ const LectorPDF = (function () {
     ["Árbol caído", /[aá]rbol(?:es)?\s+ca[ií]do/]
   ];
   function tipoDe(texto) {
-    const t = String(texto || "").toLowerCase();
+    // «Puente Linda», «Puente Iglesias»…: nombres de lugares, no un daño en un puente
+    const t = String(texto || "").replace(/\bPuente\s+(?=[A-ZÁÉÍÓÚÑ][a-záéíóúñ])/g, "").toLowerCase();
     let mejor = "", pos = Infinity, cuenta = 0;
     CLAVES.forEach(([tipo, re]) => {
       const g = new RegExp(re.source, "g"); let m, n = 0, p = Infinity;
@@ -111,6 +112,19 @@ const LectorPDF = (function () {
       const lat = /[NS]/i.test(a[0]) ? a : b, lon = lat === a ? b : a;
       if (!/[NS]/i.test(lat[0]) || !/[WO]/i.test(lon[0])) continue;
       res.push({ i: m.index, f: m.index + m[0].length, lat: aDec(lat[1], lat[2], lat[3], lat[0]), lon: aDec(lon[1], lon[2], lon[3], lon[0]) });
+    }
+    // Decimales con hemisferio: «6.4010N 76.0473W» · «N 6.4010 W 76.0473» · «6.4339N 75.8910» (sin W: en Antioquia siempre es oeste)
+    re = new RegExp(`(?<![\\d.])([4-9][.,]\\d{3,})${S}°?${S}([NS])${S}[,;]?${S}(7[2-8][.,]\\d{3,})${S}°?${S}([WO])?(?![A-Za-z])`, "gi");
+    while ((m = re.exec(t))) {
+      if (res.some((r) => m.index < r.f && m.index + m[0].length > r.i)) continue;
+      const la = Number(m[1].replace(",", ".")) * (/S/i.test(m[2]) ? -1 : 1);
+      res.push({ i: m.index, f: m.index + m[0].length, lat: Math.round(la * 1e6) / 1e6, lon: -Math.round(Number(m[3].replace(",", ".")) * 1e6) / 1e6 });
+    }
+    re = new RegExp(`(?<![A-Za-z])([NS])${S}([4-9][.,]\\d{3,})${S}°?${S}[,;]?${S}([WO])${S}(7[2-8][.,]\\d{3,})`, "gi");
+    while ((m = re.exec(t))) {
+      if (res.some((r) => m.index < r.f && m.index + m[0].length > r.i)) continue;
+      const la = Number(m[2].replace(",", ".")) * (/S/i.test(m[1]) ? -1 : 1);
+      res.push({ i: m.index, f: m.index + m[0].length, lat: Math.round(la * 1e6) / 1e6, lon: -Math.round(Number(m[4].replace(",", ".")) * 1e6) / 1e6 });
     }
     // Decimales: 6.369444, -75.707778
     re = new RegExp(`(?<![\\d.])([5-9][.,]\\d{3,})${S}[,;]?${S}(-${S}7[3-7][.,]\\d{3,})`, "g");
@@ -204,6 +218,65 @@ const LectorPDF = (function () {
     return out;
   }
 
+  /* Registros fotográficos en tabla (ej. «Anexo A. Registro fotográfico de pérdidas de banca»):
+   *   Municipio | Punto | Vía | Abscisa | Latitud | Longitud
+   *   Caicedo   | P1    | Caicedo – Urrao (25BAN06-1) Segundo Orden | K16+600 | 6.4010N | 76.0473W
+   * Cada fila es un punto con su propio municipio, vía (nombre y código), abscisa y coordenadas. */
+  const RE_COD_PAREN = /\(\s*(\d{2,5}\s?[A-Z]{1,4}\s?\d{1,4}(?:\s?-\s?\d{1,2})?)\s*\)/;
+  const RE_COD_LIBRE = /(?:^|[^A-Z0-9-])(\d{2,5}[A-Z]{1,4}\d{1,4}(?:-\d{1,2})?)(?![A-Z0-9])/;
+  const RE_ORDEN = /\b(primer|segundo|tercer)\s+orden\b/i;
+  const esEncabezadoTabla = (l) => /\bpunto\b/i.test(l) && /\blatitud\b/i.test(l) && /\blongitud\b/i.test(l);
+  const inicioFila = (l) => /^\s*(.{0,40}?)\s*\b(P\s?-?\s?\d{1,3})\s*$/i.exec(l) || /^\s*(.{0,40}?)\s*\b(P\s?-?\s?\d{1,3})\b(?=\s+[A-ZÁÉÍÓÚÑ(])/.exec(l);
+  function tablaPuntos(paginas) {
+    const out = [];
+    paginas.forEach((pag, k) => {
+      const lineas = normalizar(pag).split("\n").map((l) => l.trim()).filter(Boolean);
+      let enTabla = false, fila = null;
+      const cerrar = () => {
+        if (!fila) return;
+        const resto = fila.lineas.join("\n"), plano = resto.replace(/\s+/g, " ");
+        const c = buscarCoordenadas(plano)[0];
+        const pr = prDe(plano);
+        if (c || pr) {
+          const mCod = plano.match(RE_COD_PAREN) || plano.match(RE_COD_LIBRE);
+          const codigo = mCod ? mCod[1].toUpperCase().replace(/\s/g, "") : "";
+          const orden = (plano.match(RE_ORDEN) || [])[0] || "";
+          // Nombre de la vía: el texto de la celda «Vía», sin el código, el orden, la abscisa ni las coordenadas
+          let via = resto.split("\n").filter((l) => !RE_PR.test(l) && !buscarCoordenadas(l).length).join(" ");
+          if (mCod) via = via.replace(/\(\s*\d{2,5}\s?[A-Z]{1,4}\s?\d{1,4}(?:\s?-\s?\d{1,2})?\s*\)/, " ").replace(mCod[1], " ");
+          via = via.replace(RE_ORDEN, " ").replace(/\(\s*\)/g, " ").replace(/\s*[-–—]\s*/g, " - ").replace(/\s{2,}/g, " ").replace(/^[\s-]+|[\s-]+$/g, "").trim();
+          const municipio = fila.municipio.replace(/[^A-Za-zÁÉÍÓÚÑáéíóúñü .-]/g, "").trim();
+          const punto = fila.punto.toUpperCase().replace(/[^P0-9]/g, "");
+          const nombre = (municipio ? municipio + " " : "") + punto;
+          out.push({
+            lat: c ? c.lat : null, lon: c ? c.lon : null, pr, codigoVia: codigo, via, orden, municipio, nombre, pagina: k + 1, deTabla: true,
+            latitudDMS: c ? plano.slice(c.i, c.f) : "",
+            descripcion: [nombre + ".", via || codigo ? "Vía " + [via, codigo && "(" + codigo + ")"].filter(Boolean).join(" ") + (orden ? ", " + orden.toLowerCase() : "") + "." : "",
+              pr ? "Abscisa K" + pr + "." : ""].filter(Boolean).join(" ")
+          });
+        }
+        fila = null;
+      };
+      for (const l of lineas) {
+        if (esEncabezadoTabla(l)) { cerrar(); enTabla = true; continue; }
+        if (!enTabla) continue;
+        const m = inicioFila(l);
+        if (m && !buscarCoordenadas(l).length) {
+          cerrar();
+          fila = { municipio: m[1] || "", punto: m[2], lineas: [l.slice(m.index + m[0].length).trim()].filter(Boolean) };
+          continue;
+        }
+        if (fila) {
+          fila.lineas.push(l);
+          // La fila termina con las coordenadas (última celda)
+          if (buscarCoordenadas(fila.lineas.join(" ")).length && /[WO]\s*$|\d\s*$/i.test(l) && buscarCoordenadas(l).length) cerrar();
+        }
+      }
+      cerrar();
+    });
+    return out;
+  }
+
   /* paginas: textos por página. Devuelve los datos generales y un punto por cada coordenada distinta. */
   function interpretar(paginas) {
     const offs = []; let texto = "";
@@ -254,6 +327,16 @@ const LectorPDF = (function () {
       p.latitudDMS = texto.slice(mejor.o.i, mejor.o.f);
       delete p.occ;
     });
+
+    // Registro fotográfico en tabla: cada fila es un punto con su vía, municipio y abscisa (manda sobre la lectura libre)
+    const tabla = tablaPuntos(paginas);
+    if (tabla.length && tabla.length >= puntos.length * 0.5) {
+      puntos.length = 0;
+      tabla.forEach((x) => { x.tipo = tipoDe(x.descripcion) || general.tipoGeneral; puntos.push(x); });
+      // Datos generales solo si son los mismos en todo el documento (si no, cada punto lleva los suyos)
+      const unico = (k) => { const v = [...new Set(tabla.map((x) => x[k]).filter(Boolean))]; return v.length === 1 ? v[0] : ""; };
+      general.codigoVia = unico("codigoVia"); general.via = unico("via");
+    }
 
     // Informes sin coordenadas en el texto: cada sección con un PR en el título es un punto
     // (ej. «Perdida de banca Pr18+200», «Falla en tramo de vía Pr25+300»). Las coordenadas se toman luego del sello de sus fotos.

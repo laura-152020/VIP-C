@@ -127,14 +127,15 @@ const Capas = (function () {
     geometryType: "esriGeometryPoint", inSR: "4326", spatialRel: "esriSpatialRelIntersects"
   });
 
-  /* ---------- Vía más cercana al punto ---------- */
-  async function viaCercana(lat, lon) {
+  /* ---------- Vías cercanas al punto (la primera es la más cercana) ---------- */
+  async function viasCercanas(lat, lon, radio, max) {
+    radio = radio || RADIO_VIA_M;
     const res = await Promise.all(RED_VIAL.map(async (capa, k) => {
       try {
         const c = await camposVia(capa);
         if (!c.codigo && !c.nombre) return [];
         const d = await pedir(capa, "/query", Object.assign(punto(lat, lon), {
-          distance: RADIO_VIA_M, units: "esriSRUnit_Meter", outFields: [c.codigo, c.nombre].filter(Boolean).join(","),
+          distance: radio, units: "esriSRUnit_Meter", outFields: [c.codigo, c.nombre].filter(Boolean).join(","),
           returnGeometry: "true", outSR: "4326"
         }));
         return (d.features || []).map((ft) => ({
@@ -143,10 +144,13 @@ const Capas = (function () {
         }));
       } catch (e) { console.warn("[VIP-C capas] red vial", capa, e.message); return []; }
     }));
-    const todas = res.flat().filter((v) => (v.codigo || v.nombre) && isFinite(v.distancia) && v.distancia <= RADIO_VIA_M);
+    const todas = res.flat().filter((v) => (v.codigo || v.nombre) && isFinite(v.distancia) && v.distancia <= radio);
     todas.sort((a, b) => a.distancia - b.distancia);
-    return todas[0] || null;
+    const vistas = new Set(), unicas = [];
+    todas.forEach((v) => { const k = normCodigo(v.codigo) + "|" + normNombre(v.nombre); if (!vistas.has(k)) { vistas.add(k); unicas.push(v); } });
+    return unicas.slice(0, max || 8);
   }
+  async function viaCercana(lat, lon) { return (await viasCercanas(lat, lon, RADIO_VIA_M, 1))[0] || null; }
 
   /* ---------- Municipio, subregión y vereda donde cae el punto ---------- */
   // Se piden todas las columnas del polígono donde cae el punto y se escoge el valor que corresponde,
@@ -253,6 +257,31 @@ const Capas = (function () {
     c.porNombre.forEach((v) => { const x = LectorSello.parecido(texto, v.nombre); if (x > p) { p = x; mejor = v; } });
     return p >= (minimo || 0.7) ? Object.assign({ parecido: p }, mejor) : null;
   }
+  // Todas las vías (código + nombre), sin repetir, para la lista desplegable de tramos
+  let todas = null;
+  async function todasLasVias() {
+    if (todas) return todas;
+    const c = await cargarCatalogo(), vistas = new Set(), out = [];
+    [...c.porCodigo.values(), ...c.porNombre.values()].forEach((v) => {
+      const k = normCodigo(v.codigo) + "|" + normNombre(v.nombre);
+      if (vistas.has(k)) return; vistas.add(k);
+      out.push(Object.assign({ buscar: normNombre(v.nombre) + " " + normCodigo(v.codigo).toLowerCase() }, v));
+    });
+    out.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+    todas = out;
+    return out;
+  }
+  // Busca por palabras sueltas, sin importar tildes ni el orden (ej. «urrao caic» → Caicedo - Urrao)
+  async function buscarVias(texto, max) {
+    const lista = await todasLasVias();
+    const q = normNombre(texto), qc = normCodigo(texto).toLowerCase();
+    if (!q) return lista.slice(0, max || 60);
+    const palabras = q.split(" ").filter(Boolean);
+    const r = lista.filter((v) => palabras.every((w) => v.buscar.includes(w)) || (qc.length >= 3 && v.buscar.includes(qc)));
+    const peso = (v) => (normCodigo(v.codigo).toLowerCase() === qc ? 0 : normNombre(v.nombre).startsWith(q) ? 1 : 2);
+    r.sort((a, b) => peso(a) - peso(b));
+    return r.slice(0, max || 60);
+  }
   async function listas() {
     const c = await cargarCatalogo();
     return { codigos: [...c.porCodigo.values()], nombres: [...c.porNombre.values()] };
@@ -271,6 +300,6 @@ const Capas = (function () {
     return out;
   }
 
-  return { nombreParecido, usarServidor, enPunto, viaCercana, division, porCodigo, porNombre, listas, cargarCatalogo, diagnostico, distanciaALinea };
+  return { nombreParecido, usarServidor, enPunto, viaCercana, viasCercanas, buscarVias, todasLasVias, division, porCodigo, porNombre, listas, cargarCatalogo, diagnostico, distanciaALinea };
 })();
 if (typeof module !== "undefined") module.exports = Capas;
