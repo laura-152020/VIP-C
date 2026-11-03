@@ -380,10 +380,31 @@ const LectorSello = (function () {
     return palabras.length && (t.match(/[A-Za-zÁÉÍÓÚÑáéíóúñ]/g) || []).length / t.replace(/[\s-]/g, "").length > 0.85 ? t : "";
   }
 
+  /* Quita el ruido del fondo que el OCR pega al tramo (ej. «LÍA ya EAN A ANA Caicedo - Urrao» → «Caicedo - Urrao»).
+     En un tramo con segmentos, el primero se recorta por la izquierda y el último por la derecha hasta palabras
+     con forma de nombre (Mayúscula + minúsculas, o de/del/la…). Si no queda nada que parezca un nombre, devuelve ""
+     y el tramo lo pone la vía más cercana de la red vial. */
+  const CONECTOR = /^(de|del|la|las|el|los|y|e)$/i;
+  const esNombre = (w) => /^\(?[A-ZÁÉÍÓÚÑ][a-záéíóúñü]{2,}\.?\)?$/.test(w) || CONECTOR.test(w) || /^\(.*|.*\)$/.test(w);
+  function depurarTramo(t) {
+    if (!t || !/ - /.test(t)) return t || "";
+    const segs = t.split(" - ").map((x) => x.trim().split(/\s+/).filter(Boolean));
+    const n = segs.length;
+    const limpio = segs.map((w, i) => {
+      if (i === 0) { let k = w.length; while (k > 0 && esNombre(w[k - 1])) k--; w = w.slice(k); }   // izquierda
+      if (i === n - 1) { let k = 0; while (k < w.length && esNombre(w[k])) k++; w = w.slice(0, k); } // derecha
+      while (w.length && CONECTOR.test(w[0]) && !/^(la|el|los|las)$/i.test(w[0])) w.shift();
+      while (w.length && CONECTOR.test(w[w.length - 1])) w.pop();
+      return (i > 0 && i < n - 1 && !w.every(esNombre)) ? "" : w.join(" ");
+    }).filter((x) => /[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}/.test(x));
+    return limpio.length >= 2 || (limpio.length === 1 && n === 1) ? corregirSegmentos(limpio.join(" - ")) : (limpio.length === 1 && /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,}/.test(limpio[0]) ? corregirSegmentos(limpio[0]) : "");
+  }
+
   function interpretar(texto) {
     const f = buscarFecha(texto), c = buscarCoordenadas(texto), v = buscarTramo(texto);
     const bajo = c ? tramoBajoCoordenadas(texto) : "";
     if (bajo && !/^v[ií]a\b/i.test(v.tramo || "")) v.tramo = bajo; // en el formato estándar, la línea bajo las coordenadas manda
+    v.tramo = depurarTramo(v.tramo);
     return {
       fecha: f ? f.iso : "", fechaTexto: f ? f.texto : "",
       latitud: c ? c.lat : null, longitud: c ? c.lon : null,
