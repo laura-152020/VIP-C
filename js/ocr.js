@@ -48,18 +48,20 @@ const LectorSello = (function () {
       const mn = Math.min(r, g, b), mx = Math.max(r, g, b);
       let v;
       if (modo === "blanco" || modo === "sombra") v = (mn > umbral && mx - mn < 60) ? 0 : 255;
-      else if (modo === "adapt") v = (mx - mn < 60) ? mn : 0; // colores saturados nunca son texto; se resuelve abajo
+      else if (modo === "adapt" || modo === "local") v = (mx - mn < (modo === "local" ? 80 : 60)) ? mn : 0; // colores saturados nunca son texto; se resuelve abajo
       else { const l = 0.299 * r + 0.587 * g + 0.114 * b; v = Math.max(0, Math.min(255, (255 - l - 60) * 1.6 + 128)); }
       p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 255;
     }
     if (modo === "sombra") filtrarPorSombra(d, c.width, c.height, Math.max(4, Math.round(c.height * 0.012)), img, x0, y0, escala);
     if (modo === "adapt") umbralAdaptativo(d, c.width, c.height, 40, 45);
+    if (modo === "local") umbralAdaptativo(d, c.width, c.height, 30, 28, 110); // texto gris claro sobre asfalto
     ctx.putImageData(d, 0, 0);
     return c;
   }
 
   // Umbral según el fondo local: texto = más claro que el promedio de su entorno + margen (sirve en carretera clara y en vegetación)
-  function umbralAdaptativo(d, w, h, r, margen) {
+  function umbralAdaptativo(d, w, h, r, margen, piso) {
+    piso = piso || 185;
     const p = d.data, n = w * h, mn = new Float32Array(n);
     for (let j = 0, i = 0; j < n; j++, i += 4) mn[j] = p[i];
     // los valores ya son el mínimo de canal; saturación se revisa abajo con la imagen original no disponible, así que se usa solo brillo
@@ -71,7 +73,7 @@ const LectorSello = (function () {
         const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
         const suma = I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0];
         const fondo = suma / ((y1 - y0) * (x1 - x0));
-        const u = Math.min(240, Math.max(185, fondo + margen));
+        const u = Math.min(240, Math.max(piso, fondo + margen));
         const j = y * w + x, v = mn[j] > u ? 0 : 255, i = j * 4;
         p[i] = p[i + 1] = p[i + 2] = v;
       }
@@ -97,6 +99,30 @@ const LectorSello = (function () {
     }
     const p = d.data;
     for (let j = 0, i = 0; j < mn.length; j++, i += 4) if (p[i] === 0 && mn[j] > 120) p[i] = p[i + 1] = p[i + 2] = 255;
+  }
+
+
+  // Separa un recorte (texto negro sobre blanco) en líneas de texto; cada línea se lee sola (psm 7), lo que evita que el OCR mezcle renglones.
+  function lineasDe(c) {
+    const w = c.width, h = c.height, d = c.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+    const fila = new Uint32Array(h);
+    for (let y = 0; y < h; y++) { let n = 0; for (let x = 0; x < w; x += 2) if (d[(y * w + x) * 4] < 128) n++; fila[y] = n; }
+    const minN = Math.max(3, w * 0.004), bandas = []; let ini = -1, hueco = 0;
+    const tolera = Math.max(4, Math.round(h * 0.012));
+    for (let y = 0; y < h; y++) {
+      if (fila[y] >= minN) { if (ini < 0) ini = y; hueco = 0; }
+      else if (ini >= 0 && ++hueco > tolera) { bandas.push([ini, y - hueco]); ini = -1; hueco = 0; }
+    }
+    if (ini >= 0) bandas.push([ini, h - 1]);
+    const out = [];
+    for (const [a, b] of bandas) {
+      const alto = b - a + 1; if (alto < 14 || alto > h * 0.5) continue;
+      const pad = Math.round(alto * 0.4), o = document.createElement("canvas");
+      o.width = w + 2 * pad; o.height = alto + 2 * pad;
+      const x = o.getContext("2d"); x.fillStyle = "#fff"; x.fillRect(0, 0, o.width, o.height);
+      x.drawImage(c, 0, a, w, alto, pad, pad, w, alto); out.push(o);
+    }
+    return out.slice(0, 8);
   }
 
   /* ---------- Interpretación ---------- */
@@ -211,7 +237,7 @@ const LectorSello = (function () {
 
     // 0) Hemisferio ANTES de los números: «N 6° 22' 10" W 75° 42' 28"» (sellos de varias apps de cámara)
     for (const l of [...lineas, lineas.join(" ")]) {
-      const p = l.match(/(?:^|[^A-Z])([NS])\s*[:.]?\s*([0-9][0-9°'". ,]{2,22}?)\s*[,;]?\s*([WO])\s*[:.]?\s*([0-9][0-9°'". ,]{2,22})/);
+      const p = l.match(/(?:^|[^A-Z])([NS])\s*[:.,]?\s*([0-9][0-9°'". ,?%*!:;<\-]{2,24}?)\s*[,;]?\s*([WO])\s*[:.,]?\s*([0-9][0-9°'". ,?%*!:;<\-]{2,24})/);
       if (p) {
         const la = leerBloque(p[2], "lat"), lo = leerBloque(p[4], "lon");
         if (la && lo) return { lat: r6(la.v), lon: r6(-lo.v), latTxt: la.txt, lonTxt: lo.txt, dudoso: !!(la.dudoso || lo.dudoso) };
@@ -221,7 +247,7 @@ const LectorSello = (function () {
     // 1) Grados-minutos-segundos con hemisferio
     let lat = null, lon = null;
     for (const l of lineas) {
-      const re = /([0-9][0-9°'". ,:;]{1,24}?)\s*([NSWO])(?![A-ZÁÉÍÓÚÑ])/g;
+      const re = /([0-9][0-9°'". ,:;?%*!\-]{1,24}?)\s*([NSWO])(?![A-ZÁÉÍÓÚÑ])/g;
       let m;
       while ((m = re.exec(l))) {
         const tipo = (m[2] === "N" || m[2] === "S") ? "lat" : "lon";
@@ -387,7 +413,12 @@ const LectorSello = (function () {
   const CONECTOR = /^(de|del|la|las|el|los|y|e)$/i;
   const esNombre = (w) => /^\(?[A-ZÁÉÍÓÚÑ][a-záéíóúñü]{2,}\.?\)?$/.test(w) || CONECTOR.test(w) || /^\(.*|.*\)$/.test(w);
   function depurarTramo(t) {
-    if (!t || !/ - /.test(t)) return t || "";
+    if (!t) return "";
+    if (!/ - /.test(t)) {
+      const w = t.trim().split(/\s+/);
+      const buenas = w.filter((x) => esNombre(x) || /^[a-záéíóúñ]{4,}$/.test(x)).length;
+      return w.length <= 6 && buenas / w.length >= 0.6 && w.some((x) => /^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}/.test(x)) && !ES_REGION.test(t) ? t : "";
+    }
     const segs = t.split(" - ").map((x) => x.trim().split(/\s+/).filter(Boolean));
     const n = segs.length;
     const limpio = segs.map((w, i) => {
@@ -426,20 +457,27 @@ const LectorSello = (function () {
     // Formato de sello usado por todos (abajo a la derecha, texto blanco con sombra):
     //   «26/10/26, 10:36 a.m.» · «6° 38' 21.075" N, 74° 53' 24.732" W» · «Porcesito - La Cortada - Yolombó - Vegachí»
     // Primero se lee solo esa franja (más rápido y con menos ruido); si no basta, las pasadas generales.
-    const intentos = [[0.78, 1, "blanco", 225, 0.25], [0.78, 1, "sombra", 200, 0.25], [0.78, 1, "adapt", 0, 0.25], [0.75, 1, "blanco", 190, 0.2], [0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200], [0.55, 1, "sombra", 185], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
+    // Al final, los sellos que van ARRIBA a la derecha (varias apps de cámara) y el texto gris claro.
+    const intentos = [[0.78, 1, "blanco", 225, 0.25], [0.78, 1, "sombra", 200, 0.25], [0.78, 1, "adapt", 0, 0.25], [0.75, 1, "blanco", 190, 0.2], [0.55, 1, "adapt", 0, 0.4], [0.55, 1, "blanco", 235, 0.4], [0.55, 1, "adapt"], [0.55, 1, "blanco", 200],
+      [0, 0.3, "blanco", 225, 0.3], [0, 0.3, "sombra", 200, 0.3], [0, 0.3, "adapt", 0, 0.3], [0.55, 1, "sombra", 185], [0.72, 1, "blanco", 170, 0.3], [0.35, 1, "adapt"], [0.55, 1, "gris"], [0, 0.4, "adapt"]];
     let mejor = null, textos = [], textosN = 0;
     let tramoAncho = false; // el nombre del tramo leído en una pasada de ancho completo (no recortado a la izquierda)
-    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[1], intentos[3], intentos[2]] : intentos)) {
+    for (const [a, b, modo, umbral, x] of (rapido ? [intentos[0], intentos[1], intentos[3], intentos[2], intentos[8], intentos[9]] : intentos)) {
       const { data } = await w.recognize(franja(img, a, b, modo, umbral, x));
       textos.push(data.text);
       const r = interpretar(data.text);
       // Combina lo mejor de cada intento
-      if (!mejor) mejor = r;
+      if (!mejor) { mejor = r; mejor.tramoConCoord = r.latitud != null && !!r.tramo; }
       else {
         if (r.latitud != null && (mejor.latitud == null || (mejor.coordDudosa && !r.coordDudosa)))
           Object.assign(mejor, { latitud: r.latitud, longitud: r.longitud, latitudDMS: r.latitudDMS, longitudDMS: r.longitudDMS, coordDudosa: r.coordDudosa });
         if (!mejor.fecha && r.fecha) Object.assign(mejor, { fecha: r.fecha, fechaTexto: r.fechaTexto });
-        if (r.tramo && (calidadTramo(r.tramo) > calidadTramo(mejor.tramo) || ((!x || x <= 0.25) && r.tramo.length > (mejor.tramo || "").length && calidadTramo(r.tramo) >= calidadTramo(mejor.tramo)))) mejor.tramo = r.tramo;
+        else if (r.fecha && r.fechaTexto && mejor.fechaTexto && r.fecha !== mejor.fecha && r.fechaTexto.replace(/\D/g, "").endsWith(mejor.fechaTexto.replace(/\D/g, "")) && r.fechaTexto.replace(/\D/g, "").length > mejor.fechaTexto.replace(/\D/g, "").length)
+          Object.assign(mejor, { fecha: r.fecha, fechaTexto: r.fechaTexto }); // la otra pasada recortó el primer dígito
+        const conCoord = r.latitud != null, mejorConCoord = !!mejor.tramoConCoord;
+        if (r.tramo && (!mejor.tramo || (conCoord && !mejorConCoord) || (conCoord === mejorConCoord && (calidadTramo(r.tramo) > calidadTramo(mejor.tramo) || ((!x || x <= 0.25) && r.tramo.length > (mejor.tramo || "").length && calidadTramo(r.tramo) >= calidadTramo(mejor.tramo)))))) {
+          mejor.tramo = r.tramo; mejor.tramoConCoord = conCoord;
+        }
         if (!mejor.codigoVia && r.codigoVia) mejor.codigoVia = r.codigoVia;
         if (!mejor.municipioTexto && r.municipioTexto) mejor.municipioTexto = r.municipioTexto;
       }
@@ -449,6 +487,28 @@ const LectorSello = (function () {
       if (rapido && mejor.latitud != null && !mejor.coordDudosa) break;
       if (textosN >= 3 && mejor.fecha && mejor.tramo && mejor.latitud == null) break; // sello sin coordenadas: no insistir
       if (textosN >= 4 && mejor.fecha && mejor.latitud != null) break;                 // lectura dudosa: no alargar más
+    }
+    if (mejor.latitud == null || !mejor.fecha) {
+      // Último recurso: cada línea del sello se lee sola y, para los números, solo con dígitos y símbolos de coordenadas.
+      try {
+        const zonas = [[0.7, 1, "blanco", 215, 0.25], [0.7, 1, "blanco", 190, 0.25], [0.7, 1, "adapt", 0, 0.25], [0.7, 1, "local", 0, 0.25], [0.87, 1, "gris", 0, 0.72], [0.87, 1, "local", 0, 0.72], [0, 0.3, "blanco", 215, 0.3], [0, 0.1, "gris", 0, 0.45], [0, 0.1, "local", 0, 0.45], [0, 0.1, "sombra", 190, 0.45]];
+        for (const [a, b, modo, umbral, x] of zonas) {
+          const zona = franja(img, a, b, modo, umbral, x);
+          const lin = lineasDe(zona); if (!lin.length || x >= 0.7) lin.push(zona); // zona angosta: también completa
+          await w.setParameters({ tessedit_pageseg_mode: "7", tessedit_char_whitelist: "0123456789.,°'\" NSWO+-:/" });
+          const nums = []; for (const l of lin) nums.push((await w.recognize(l)).data.text.trim());
+          await w.setParameters({ tessedit_char_whitelist: "" });
+          const letras = []; for (const l of lin) letras.push((await w.recognize(l)).data.text.trim());
+          const tN = nums.join("\n"), tL = letras.join("\n");
+          textos.push(tN, tL);
+          const c = buscarCoordenadas(tN) || buscarCoordenadas(tL), f = buscarFecha(tL) || buscarFecha(tN);
+          if (!mejor.fecha && f) Object.assign(mejor, { fecha: f.iso, fechaTexto: f.texto });
+          if (c && mejor.latitud == null) Object.assign(mejor, { latitud: c.lat, longitud: c.lon, latitudDMS: c.latTxt, longitudDMS: c.lonTxt, coordDudosa: !!c.dudoso });
+          if (!mejor.tramo) { const t = interpretar(tL).tramo; if (t) mejor.tramo = t; }
+          if (mejor.latitud != null && mejor.fecha) break;
+        }
+      } catch (_) { /* sin la pasada por líneas */ }
+      finally { try { await w.setParameters({ tessedit_pageseg_mode: "6", tessedit_char_whitelist: "" }); } catch (_) {} }
     }
     mejor.textoLeido = textos.join("\n---\n");
     mejor.selloLegible = mejor.latitud != null && !!mejor.fecha;
