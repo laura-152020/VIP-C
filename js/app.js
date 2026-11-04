@@ -18,6 +18,19 @@
 
   const $ = (s, r) => (r || document).querySelector(s);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  /* Motivo corto (sin tecnicismos) de por qué no respondió la IA; se muestra en gris, nunca en rojo */
+  function motivoIA(m) {
+    m = String(m || "");
+    if (!m) return "";
+    if (/limitando|429|cuota|quota/i.test(m)) return "límite de uso de Gemini";
+    if (/\b404\b|not found|no existe/i.test(m)) return "modelo de Gemini no disponible";
+    if (/\b40[13]\b|api key|clave|permission|API_KEY/i.test(m)) return "clave de Gemini no válida";
+    if (/Falta .*GEMINI|GEMINI_API_KEY/i.test(m)) return "falta la clave de Gemini";
+    if (/sesi[oó]n/i.test(m)) return "sesión vencida";
+    if (/acci[oó]n|desconocid|unknown/i.test(m)) return "el backend está desactualizado";
+    if (/fetch|network|red|timeout|Failed/i.test(m)) return "sin conexión con el servidor";
+    return "sin respuesta";
+  }
   const norm = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
   const hoy = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
@@ -1071,7 +1084,7 @@
         <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}"${r.errorIA ? ` title="IA: ${esc(r.errorIA)}"` : ""}>${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
-          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: "Leído con el lector del navegador" }[r.leidoPor] || ""}</div>` : ""}
+          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: "Leído con el lector del navegador" + (r.errorIA ? " · IA no disponible: " + motivoIA(r.errorIA) : "") }[r.leidoPor] || ""}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">
@@ -1603,3 +1616,4 @@
     else if (r.status !== "sin_sesion") mostrarAcceso(r.message || "No se pudo verificar la sesión.");
   })();
 })();
+

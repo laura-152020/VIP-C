@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.5.2", gemini: !!prop_("GEMINI_API_KEY", true) });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.6.0", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -813,16 +813,52 @@ function fetchGemini_(url, key, body) {
   return res;
 }
 
+// Modelo que sí existe para esta clave: si el configurado no existe (404), prueba otros y recuerda el que funcione 6 horas.
+const MODELOS_RESPALDO = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
+function modeloQueFunciona_(key, fallido) {
+  const cache = CacheService.getScriptCache();
+  const guardado = cache.get("gemini_modelo_ok");
+  if (guardado && guardado !== fallido) return guardado;
+  let lista = [];
+  try {
+    const l = JSON.parse(UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: { "x-goog-api-key": key }, muteHttpExceptions: true }).getContentText());
+    lista = (l.models || []).filter(function (m) { return (m.supportedGenerationMethods || []).indexOf("generateContent") >= 0; })
+      .map(function (m) { return String(m.name).replace("models/", ""); });
+  } catch (_) {}
+  const ordenados = MODELOS_RESPALDO.filter(function (m) { return lista.indexOf(m) >= 0; })
+    .concat(lista.filter(function (n) { return /flash/.test(n) && !/lite|image|tts|live|audio|thinking|exp/.test(n) && MODELOS_RESPALDO.indexOf(n) < 0; }).sort().reverse())
+    .concat(lista.length ? [] : MODELOS_RESPALDO);
+  for (let i = 0; i < ordenados.length && i < 4; i++) {
+    if (ordenados[i] === fallido) continue;
+    const r = UrlFetchApp.fetch("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(ordenados[i]) + ":generateContent",
+      { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key },
+        payload: JSON.stringify({ contents: [{ parts: [{ text: "Responde solo: ok" }] }] }) });
+    const c = r.getResponseCode();
+    if (c === 200 || c === 429) { cache.put("gemini_modelo_ok", ordenados[i], 21600); return ordenados[i]; }
+  }
+  return "";
+}
+
 function geminiRapido_(key, modelo, body, preciso) {
   if (preciso) modelo = prop_("GEMINI_MODEL_PRECISO", true) || modelo;
-  const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
-  const enviar = function (b) { return fetchGemini_(url, key, b); };
-  // Modo preciso: el modelo razona antes de responder (más lento, pero revisa dígito por dígito)
-  if (preciso) return enviar(body);
-  const rapido = JSON.parse(JSON.stringify(body));
-  rapido.generationConfig = Object.assign({}, rapido.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
-  let res = enviar(rapido);
-  if (res.getResponseCode() === 400) res = enviar(body);
+  const cacheado = CacheService.getScriptCache().get("gemini_modelo_ok");
+  if (cacheado && modelo === (prop_("GEMINI_MODEL", true) || "gemini-3.8-flash")) modelo = cacheado; // el configurado ya falló antes
+  const llamar = function (m) {
+    const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(m) + ":generateContent";
+    const enviar = function (b) { return fetchGemini_(url, key, b); };
+    // Modo preciso: el modelo razona antes de responder (más lento, pero revisa dígito por dígito)
+    if (preciso) return enviar(body);
+    const rapido = JSON.parse(JSON.stringify(body));
+    rapido.generationConfig = Object.assign({}, rapido.generationConfig, { thinkingConfig: { thinkingBudget: 0 } });
+    let r = enviar(rapido);
+    if (r.getResponseCode() === 400) r = enviar(body);
+    return r;
+  };
+  let res = llamar(modelo);
+  if (res.getResponseCode() === 404) { // modelo inexistente para esta clave
+    const otro = modeloQueFunciona_(key, modelo);
+    if (otro) res = llamar(otro);
+  }
   return res;
 }
 
