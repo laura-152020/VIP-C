@@ -131,7 +131,7 @@
         r.tramoDe = "redvial"; r.viaAuto = true;
       } else if (!String(r.codigoVia).trim() && v.codigo) { r.codigoVia = v.codigo; cambio = true; }
       r.viaInfo = `vía ${v.orden.toLowerCase()} a ${Math.round(v.distancia)} m`;
-    }
+    } else if (!r.viaInfo) { r.viaInfo = "no hay una vía de la red vial a menos de 300 m de este punto"; cambio = true; }
     if (cambio || v) repintarSinPerderFoco(r, repintar);
   }
   // Relación código ↔ nombre de la red vial: al escribir uno, se completa el otro
@@ -523,8 +523,14 @@
   const metros = (a, b) => Math.hypot((a.latitud - b.latitud) * 110574, (a.longitud - b.longitud) * 111320);
   function ponerCoords(r, x, de) {
     r.latitud = x.latitud; r.longitud = x.longitud;
-    r.latitudDMS = x.latitudDMS && /[°NS]/.test(x.latitudDMS) ? x.latitudDMS : decimalADMS(x.latitud, true);
-    r.longitudDMS = x.longitudDMS && /[°WOE]/.test(x.longitudDMS) ? x.longitudDMS : decimalADMS(x.longitud, false);
+    // Las coordenadas se muestran como están escritas en el sello (decimales o grados), sin convertirlas
+    const comoSello = (t, v, esLat) => {
+      t = String(t || "").trim();
+      if (!/\d/.test(t)) return decimalADMS(v, esLat);
+      return /[°NSWOE]/i.test(t) ? t : t.replace(/^-/, "") + (esLat ? (v < 0 ? "S" : "N") : (v < 0 ? "W" : "E"));
+    };
+    r.latitudDMS = comoSello(x.latitudDMS, x.latitud, true);
+    r.longitudDMS = comoSello(x.longitudDMS, x.longitud, false);
     r.origenUbicacion = "sello"; r.coordDe = de;
   }
   // Lo que leyó la IA reemplaza lo que se llenó solo. Devuelve true si cambió algo.

@@ -6,11 +6,11 @@
 const Capas = (function () {
   "use strict";
   const BASE = "https://services5.arcgis.com/K90UQIB09TmTjUL8/arcgis/rest/services/";
-  const RED_VIAL = ["R10/FeatureServer/1", "R10/FeatureServer/2", "R10/FeatureServer/3"]; // primaria, secundaria, terciaria
+  const RED_VIAL = ["R10/FeatureServer/1", "R10/FeatureServer/2", "R10/FeatureServer/3"]; // primaria, secundaria, terciaria (se confirman consultando el servicio)
   const ORDEN = ["Primaria", "Secundaria", "Terciaria"];
   const DIVISION = "División_política_de_Antioquia/FeatureServer/";
-  const CAPA_VEREDAS = DIVISION + "2", CAPA_MUNICIPIOS = DIVISION + "3", CAPA_SUBREGIONES = DIVISION + "4";
-  const RADIO_VIA_M = 200; // la vía más cercana debe estar a menos de esta distancia del punto
+  let CAPA_VEREDAS = DIVISION + "2", CAPA_MUNICIPIOS = DIVISION + "3", CAPA_SUBREGIONES = DIVISION + "4";
+  const RADIO_VIA_M = 300; // la vía más cercana debe estar a menos de esta distancia del punto
 
   const sinTilde = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
   const url = (capa) => BASE + encodeURI(capa);
@@ -39,6 +39,40 @@ const Capas = (function () {
     if (d.error) { ultimoError = "servidor: ArcGIS " + (d.error.code || "") + ": " + (d.error.message || ""); throw new Error(ultimoError); }
     if (modo === "directo") { modo = "servidor"; console.info("[VIP-C capas] desde ahora consulto ArcGIS a través del servidor"); }
     return d;
+  }
+
+  /* ---------- Descubre las capas reales de cada servicio ----------
+     Se leen los servicios de la Gobernación y se usan las capas de líneas (red vial) y de polígonos (veredas, municipios,
+     subregiones) que tengan, sin depender de que el número de capa sea siempre el mismo. */
+  let descubierto = null;
+  function descubrir() {
+    if (descubierto) return descubierto;
+    descubierto = (async () => {
+      const capasDe = async (servicio, tipo) => {
+        const d = await pedir(servicio, "");
+        const out = [];
+        await Promise.all((d.layers || []).map(async (l) => {
+          try { const m = await pedir(servicio + "/" + l.id, ""); if (m.geometryType === tipo) out.push({ id: l.id, name: m.name || l.name || "" }); } catch (_) {}
+        }));
+        return out.sort((a, b) => a.id - b.id);
+      };
+      try {
+        const vias = await capasDe("R10/FeatureServer", "esriGeometryPolyline");
+        if (vias.length) {
+          const rango = (n) => { const x = sinTilde(n); return /primar/.test(x) ? 0 : /secund/.test(x) ? 1 : /tercia/.test(x) ? 2 : 9; };
+          vias.sort((a, b) => rango(a.name) - rango(b.name) || a.id - b.id);
+          RED_VIAL.length = 0; ORDEN.length = 0;
+          vias.forEach((v) => { RED_VIAL.push("R10/FeatureServer/" + v.id); const r = rango(v.name); ORDEN.push(["Primaria", "Secundaria", "Terciaria"][r] || v.name); });
+        }
+      } catch (e) { console.warn("[VIP-C capas] no se pudo leer el servicio de red vial; uso las capas por defecto:", e.message); }
+      try {
+        const pol = await capasDe(DIVISION.replace(/\/$/, ""), "esriGeometryPolygon");
+        const por = (re) => { const l = pol.find((x) => re.test(sinTilde(x.name))); return l ? DIVISION + l.id : ""; };
+        CAPA_VEREDAS = por(/vereda/) || CAPA_VEREDAS; CAPA_MUNICIPIOS = por(/municip/) || CAPA_MUNICIPIOS; CAPA_SUBREGIONES = por(/subreg/) || CAPA_SUBREGIONES;
+      } catch (e) { console.warn("[VIP-C capas] no se pudo leer el servicio de división política; uso las capas por defecto:", e.message); }
+      console.info("[VIP-C capas] red vial:", RED_VIAL.map((c, i) => c + " (" + ORDEN[i] + ")").join(", "), "| veredas:", CAPA_VEREDAS, "| municipios:", CAPA_MUNICIPIOS, "| subregiones:", CAPA_SUBREGIONES);
+    })();
+    return descubierto;
   }
 
   /* ---------- Campos de cada capa (se detectan por nombre o alias) ---------- */
@@ -130,6 +164,7 @@ const Capas = (function () {
   /* ---------- Vías cercanas al punto (la primera es la más cercana) ---------- */
   async function viasCercanas(lat, lon, radio, max) {
     radio = radio || RADIO_VIA_M;
+    await descubrir();
     const res = await Promise.all(RED_VIAL.map(async (capa, k) => {
       try {
         const c = await camposVia(capa);
@@ -176,6 +211,7 @@ const Capas = (function () {
     return x ? x[1] : "";
   }
   async function division(lat, lon) {
+    await descubrir();
     const [aMun, aSub, aVer] = await Promise.all([atributosEn(CAPA_MUNICIPIOS, lat, lon), atributosEn(CAPA_SUBREGIONES, lat, lon), atributosEn(CAPA_VEREDAS, lat, lon)]);
     const municipio = elegir(aMun, PAT_MUNICIPIO, esMunicipio) || elegir(aVer, PAT_MUNICIPIO, esMunicipio);
     const subregion = elegir(aSub, PAT_SUBREGION, esSubregion) || elegir(aMun, PAT_SUBREGION, esSubregion);
@@ -221,6 +257,7 @@ const Capas = (function () {
     const guardado = desdeCache();
     if (guardado) { catalogo = Promise.resolve(guardado); return catalogo; } // abre al instante: la red vial casi no cambia
     catalogo = (async () => {
+      await descubrir();
       const porCodigo = new Map(), porNombre = new Map();
       let fallos = 0;
       // Las 3 capas (primaria, secundaria, terciaria) se consultan al mismo tiempo
@@ -316,6 +353,7 @@ const Capas = (function () {
 
   // Para revisar desde la consola del navegador qué campos se detectaron: Capas.diagnostico()
   async function diagnostico() {
+    await descubrir();
     const out = {};
     for (const capa of RED_VIAL) out[capa] = await camposVia(capa).catch((e) => e.message);
     out.division = await division(6.369444, -75.707778).catch((e) => e.message);

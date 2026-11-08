@@ -289,7 +289,7 @@ const LectorSello = (function () {
     const reDec = /(-?[5-8])[.,](\d{3,8})[^0-9]{1,12}?(-?\s?7[3-7])[.,\-](\d{3,8})/g;
     while ((m = reDec.exec(t))) {
       const la = Number(m[1].replace(/\s/g, "") + "." + m[2]), lo = -Math.abs(Number(m[3].replace(/\s/g, "") + "." + m[4]));
-      if (enRango(la, lo)) return { lat: r6(la), lon: r6(lo), latTxt: String(r6(la)), lonTxt: String(r6(lo)) };
+      if (enRango(la, lo)) return { lat: r6(la), lon: r6(lo), latTxt: String(r6(la)) + "N", lonTxt: String(Math.abs(r6(lo))) + "W" };
     }
     return null;
   }

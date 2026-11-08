@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.8.0", gemini: !!prop_("GEMINI_API_KEY", true) });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.8.1", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -835,7 +835,7 @@ function modeloQueFunciona_(key, fallido) {
       { method: "post", contentType: "application/json", muteHttpExceptions: true, headers: { "x-goog-api-key": key },
         payload: JSON.stringify({ contents: [{ parts: [{ text: "Responde solo: ok" }] }] }) });
     const c = r.getResponseCode();
-    if (c === 200 || c === 429) { cache.put("gemini_modelo_ok", ordenados[i], 21600); return ordenados[i]; }
+    if (c === 200) { cache.put("gemini_modelo_ok", ordenados[i], 21600); return ordenados[i]; }
   }
   return "";
 }
@@ -856,7 +856,8 @@ function geminiRapido_(key, modelo, body, preciso) {
     return r;
   };
   let res = llamar(modelo);
-  if (res.getResponseCode() === 404) { // modelo inexistente para esta clave
+  const cod = res.getResponseCode(), sinCupo = cod === 429 && /limit:\s*0|RESOURCE_EXHAUSTED/i.test(res.getContentText().slice(0, 1500));
+  if (cod === 404 || sinCupo) { // modelo inexistente, o sin cupo gratuito para esta clave
     const otro = modeloQueFunciona_(key, modelo);
     if (otro) res = llamar(otro);
   }
@@ -1657,8 +1658,9 @@ function estadoIA_() {
       const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
       const res = geminiRapido_(key, modelo, { contents: [{ parts: [{ text: "Responde solo: ok" }] }] });
       const code = res.getResponseCode();
+      const detalle = code === 200 ? "" : " (" + String(errorGemini_(res)).slice(0, 160) + ")";
       r = code === 200 ? { status: "success", ok: true }
-        : { status: "success", ok: false, motivo: code === 429 ? "se agotó el límite de uso de Gemini" : code === 404 ? "el modelo de Gemini no existe para tu clave" : (code === 400 || code === 403) ? "la clave de Gemini no es válida o no tiene permiso" : "Gemini respondió error " + code };
+        : { status: "success", ok: false, motivo: code === 429 ? "Google rechazó por límite de cuota" + detalle : code === 404 ? "el modelo de Gemini no existe para tu clave" : (code === 400 || code === 403) ? "la clave de Gemini no es válida o no tiene permiso" : "Gemini respondió error " + code };
     } catch (e) { r = { status: "success", ok: false, motivo: "no se pudo consultar a Gemini" }; }
   }
   cache.put("estado_ia", JSON.stringify(r), r.ok ? 600 : 120);
