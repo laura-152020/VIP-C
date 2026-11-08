@@ -1310,7 +1310,7 @@
     if (selVf) $("#vf-detalle").scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
   $("#vf-confirmo").addEventListener("change", () => { $("#vf-enviar").disabled = guardando || !$("#vf-confirmo").checked; });
-  $("#ir-verificar").addEventListener("click", () => { vistaAntes = $("#app").dataset.vista || "fotos"; $("#vf-confirmo").checked = false; msgVf(""); aviso(""); selVf = null; window.VistaInicio.ir("verificar"); pintarVerificar(); });
+  const irVerificar = () => { vistaAntes = $("#app").dataset.vista || "fotos"; $("#vf-confirmo").checked = false; msgVf(""); aviso(""); selVf = null; window.VistaInicio.ir("verificar"); pintarVerificar(); };
   $("#vf-volver").addEventListener("click", () => window.VistaInicio.ir(vistaAntes === "verificar" ? "inicio" : vistaAntes));
   $("#vf-enviar").addEventListener("click", async () => {
     const lista = pendientes();
@@ -1343,8 +1343,6 @@
     $("#n-leyendo").textContent = leyendo ? "· " + leyendo + " leyendo" : "";
     $("#resumen").textContent = items.length ? `${items.length} en la lista${HAY_BACKEND ? " · " + guardados + " guardados" : ""}` : "";
     const enVf = $("#app").dataset.vista === "verificar";
-    $("#reg-sig").hidden = !p || enVf;
-    $("#ir-verificar").textContent = `Siguiente → Verificar y enviar (${p})`;
     $("#guardar").disabled = guardando || (!p && !guardados) || (!p && enVf);
     $("#guardar").textContent = guardando ? "Enviando…" : (!p ? (guardados ? "✓ Todo guardado" : "Siguiente →") : (enVf ? `Enviar ${p}` : "Siguiente →"));
     $("#guardar").title = !p ? (guardados ? "Todos los registros ya están guardados en Drive, Sheets y ArcGIS." : "Agrega un registro desde las secciones 1, 2 o 3.") : "Pasa a «Verificar y enviar», donde se revisan todos los registros juntos.";
@@ -1537,7 +1535,7 @@
 
   $("#guardar").addEventListener("click", () => {
     if ($("#app").dataset.vista === "verificar") { $("#vf-enviar").click(); return; }
-    if (pendientes().length) $("#ir-verificar").click();
+    if (pendientes().length) irVerificar();
   });
 
   /* Sin servidor: los registros se guardan en este navegador y se recuperan al volver a abrir la página */

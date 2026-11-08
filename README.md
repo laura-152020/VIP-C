@@ -242,4 +242,4 @@ Las fotos con sello sacadas del PDF no se listan como tarjetas grandes: aparecen
 
 ## Verificar y enviar
 
-Las tarjetas ya no tienen la casilla «Verifiqué la información». Al final de «Registros» hay un botón **Siguiente → Verificar y enviar**, que abre una sección con todos los registros pendientes en una tabla (fecha, coordenadas, vía, municipio, tipo, responsable y qué falta). Tocar una fila abre su ficha para corregirla. Una sola casilla («Verifiqué la información de todos los registros») habilita el botón **Enviar N registros**, que guarda en Drive, Sheets y ArcGIS.
+Las tarjetas ya no tienen la casilla «Verifiqué la información». El botón **Siguiente →** de la barra inferior (el mismo en las secciones 1, 2 y 3) abre una sección con todos los registros pendientes en una tabla (fecha, coordenadas, vía, municipio, tipo, responsable y qué falta). Tocar una fila abre su ficha para corregirla. Una sola casilla («Verifiqué la información de todos los registros») habilita el botón **Enviar N registros**, que guarda en Drive, Sheets y ArcGIS.
