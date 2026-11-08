@@ -453,7 +453,8 @@
     } catch (_) { return null; }
   }
 
-  async function agregarFotos(files) {
+  async function agregarFotos(files, opciones) {
+    const creados = [];
     const maxMB = CONFIG.MAX_FILE_SIZE_MB || 20;
     for (const f of files) {
       if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { aviso(f.name + " no es JPG, PNG ni WEBP.", true); continue; }
@@ -462,13 +463,16 @@
       try { opt = await optimizar(f); } catch (_) { aviso("No se pudo abrir " + f.name + ".", true); continue; }
       const r = nuevoRegistro({ origen: "foto", estado: "leyendo", nombreArchivo: f.name, dataUrl: opt.dataUrl, base64: opt.base64, base64Lectura: opt.base64Lectura, recorte: opt.recorte, miniatura: opt.miniatura,
         responsable: manual.responsable || "" });
+      if (opciones && opciones.dePdf) r.dePdf = true;
       r.exif = await leerExif(f);
       r.urlOriginal = URL.createObjectURL(f); // el lector usa la foto original: la copia recomprimida borra detalle del sello
       items.unshift(r);
       cola.push(r);
+      creados.push(r);
     }
     render();
     procesarCola();
+    return creados;
   }
 
   const cola = [];
@@ -618,6 +622,7 @@
       if (m) { r.municipio = m.n; r.subregion = m.s; r.municipioAuto = true; }
     }
     r.selloLegible = !!(d.fecha && d.latitud != null);
+    r.iaSinSello = !!gem && !gem.fecha && gem.latitud == null; // la IA miró la imagen y no vio sello
     r.leidoPor = deGem ? (gem.preciso ? "ia-preciso" : "ia") : (ocr ? "lector" : "");
     r.confirmandoIA = !!falta && primero[0] === "ocr"; // se muestra lo del lector mientras llega la IA
     evaluar(r, error);
@@ -636,12 +641,12 @@
     if (r.estado === "guardado" || r.estado === "guardando") return;
     if (primero[0] === "ocr") {
       // Llegó la IA después del lector: manda la IA
-      r.confirmandoIA = false; gem = x;
+      r.confirmandoIA = false; gem = x; r.iaSinSello = !!x && !x.fecha && x.latitud == null;
       if (x) { r.coordDudosa = false; if (aplicarIA(r, x)) enriquecer(r, () => actualizar(r)); }
       else corregirConRed();
     } else {
       // Llegó el lector después de la IA: solo completa lo que falte
-      ocr = x;
+      ocr = x; r.iaSinSello = !!gem && !gem.fecha && gem.latitud == null;
       if (x && x.codigoVia && !r.codigoVia) r.codigoVia = x.codigoVia;
       if (x && x.tramo && !r.nombreTramo) { r.nombreTramo = x.tramo; r.tramoDe = "ocr"; corregirConRed(); }
     }
@@ -792,9 +797,22 @@
         const blob = await new Promise((ok) => cv.toBlob(ok, "image/jpeg", 0.93));
         archivos.push(new File([blob], `${base}_p${fotos[i].pagina}_${i + 1}.jpg`, { type: "image/jpeg" }));
       }
-      msgPdf(`${archivos.length} imagen(es) sacadas del PDF. Se leen abajo, en «Carga fotográfica».`);
-      await agregarFotos(archivos);
+      msgPdf(`${archivos.length} imagen(es) sacadas del PDF. Leyendo los sellos…`);
+      const creados = await agregarFotos(archivos, { dePdf: true });
       const dest = document.querySelector("#seccion-fotos"); if (dest) dest.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Solo cuentan las imágenes con sello (fecha y coordenadas): mapas, capturas y logos se descartan al terminar de leerlas
+      const t0 = Date.now(), terminado = (r) => r.estado !== "leyendo" && !r.confirmandoIA && !r.verificando;
+      while (creados.some((r) => !terminado(r)) && Date.now() - t0 < 240000) {
+        const n = creados.filter(terminado).length; msgPdf(`${archivos.length} imagen(es) del PDF · leyendo sellos (${n} de ${archivos.length})…`);
+        await new Promise((ok) => setTimeout(ok, 500));
+      }
+      // Se descarta solo si la IA las leyó y no encontró sello; si solo las leyó el lector del navegador no hay certeza y quedan para revisar
+      const sinSello = creados.filter((r) => !r.fecha && r.iaSinSello && items.includes(r));
+      sinSello.forEach((r) => { if (r.urlOriginal) URL.revokeObjectURL(r.urlOriginal); });
+      items = items.filter((x) => !sinSello.includes(x));
+      render();
+      const buenas = creados.length - sinSello.length;
+      msgPdf(`${buenas} foto(s) con sello leídas${sinSello.length ? ` · ${sinSello.length} imagen(es) sin sello descartadas (mapas, capturas o logos)` : ""}.`, !buenas);
     } catch (e) { msgPdf("No se pudo abrir " + f.name + ": " + (e.message || "PDF dañado o protegido") + ".", true); }
   }
   async function cargarPDFViejo(f) {
@@ -1518,6 +1536,16 @@
     setTimeout(() => { try { $("#acc-usuario").focus(); } catch (_) {} }, 50);
   }
   let appIniciada = false;
+  // Aviso fijo si Gemini no responde: sin la IA, los sellos pequeños o borrosos no se leen bien
+  async function avisarEstadoIA() {
+    if (!HAY_BACKEND) return;
+    const caja = $("#ia-estado");
+    try {
+      const r = await Api.post("estadoIA", {});
+      if (r && r.status === "success" && r.ok === false) { caja.textContent = "La IA (Gemini) no está respondiendo: " + r.motivo + ". Mientras tanto las fotos se leen con el lector del navegador, que falla con sellos pequeños. Avisa al administrador."; caja.hidden = false; }
+      else caja.hidden = true;
+    } catch (_) { caja.hidden = true; }
+  }
   function mostrarApp() {
     const d = Sesion.datos();
     $("#acceso").hidden = true; $("#app").hidden = false; $("#barra").hidden = false;
@@ -1526,6 +1554,7 @@
       appIniciada = true;
       pintarManual();
       cargarListasVias();
+      avisarEstadoIA();
       render();
       // Precarga el lector en segundo plano para que la primera foto sea más rápida
       setTimeout(() => { try { LectorSello.iniciar().catch(() => {}); } catch (_) {} }, 1500);

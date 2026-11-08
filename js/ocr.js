@@ -47,7 +47,8 @@ const LectorSello = (function () {
       const r = p[i], g = p[i + 1], b = p[i + 2];
       const mn = Math.min(r, g, b), mx = Math.max(r, g, b);
       let v;
-      if (modo === "blanco" || modo === "sombra") v = (mn > umbral && mx - mn < 60) ? 0 : 255;
+      if (modo === "tophat") v = Math.min(r, g, b); // brillo (se resuelve abajo)
+      else if (modo === "blanco" || modo === "sombra") v = (mn > umbral && mx - mn < 60) ? 0 : 255;
       else if (modo === "adapt" || modo === "local") v = (mx - mn < (modo === "local" ? 80 : 60)) ? mn : 0; // colores saturados nunca son texto; se resuelve abajo
       else { const l = 0.299 * r + 0.587 * g + 0.114 * b; v = Math.max(0, Math.min(255, (255 - l - 60) * 1.6 + 128)); }
       p[i] = p[i + 1] = p[i + 2] = v; p[i + 3] = 255;
@@ -55,8 +56,23 @@ const LectorSello = (function () {
     if (modo === "sombra") filtrarPorSombra(d, c.width, c.height, Math.max(4, Math.round(c.height * 0.012)), img, x0, y0, escala);
     if (modo === "adapt") umbralAdaptativo(d, c.width, c.height, 40, 45);
     if (modo === "local") umbralAdaptativo(d, c.width, c.height, 30, 28, 110); // texto gris claro sobre asfalto
+    if (modo === "tophat") topHat(d, c.width, c.height, Math.max(7, Math.round(escala * 3.2) | 1), umbral);
     ctx.putImageData(d, 0, 0);
     return c;
+  }
+
+  // Quita lo claro y ancho (grava, cielo, paredes) y deja lo claro y delgado (las letras del sello): top-hat blanco.
+  function topHat(d, w, h, k, umbral) {
+    const p = d.data, n = w * h, g = new Uint8Array(n), a = new Uint8Array(n), b = new Uint8Array(n), r = k >> 1;
+    for (let j = 0, i = 0; j < n; j++, i += 4) g[j] = p[i];
+    const filtro = (src, dst, max) => { // mínimo o máximo en ventana k×k (separable)
+      const t = new Uint8Array(n);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let m = max ? 0 : 255; for (let q = Math.max(0, x - r); q <= Math.min(w - 1, x + r); q++) { const v = src[y * w + q]; if (max ? v > m : v < m) m = v; } t[y * w + x] = m; }
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { let m = max ? 0 : 255; for (let q = Math.max(0, y - r); q <= Math.min(h - 1, y + r); q++) { const v = t[q * w + x]; if (max ? v > m : v < m) m = v; } dst[y * w + x] = m; }
+    };
+    filtro(g, a, false); filtro(a, b, true); // apertura = erosión + dilatación
+    const u = umbral || 40;
+    for (let j = 0, i = 0; j < n; j++, i += 4) { const v = g[j] - b[j] > u && g[j] > 150 ? 0 : 255; p[i] = p[i + 1] = p[i + 2] = v; }
   }
 
   // Umbral según el fondo local: texto = más claro que el promedio de su entorno + margen (sirve en carretera clara y en vegetación)
@@ -491,7 +507,7 @@ const LectorSello = (function () {
     if (mejor.latitud == null || !mejor.fecha) {
       // Último recurso: cada línea del sello se lee sola y, para los números, solo con dígitos y símbolos de coordenadas.
       try {
-        const zonas = [[0.7, 1, "blanco", 215, 0.25], [0.7, 1, "blanco", 190, 0.25], [0.7, 1, "adapt", 0, 0.25], [0.7, 1, "local", 0, 0.25], [0.87, 1, "gris", 0, 0.72], [0.87, 1, "local", 0, 0.72], [0, 0.3, "blanco", 215, 0.3], [0, 0.1, "gris", 0, 0.45], [0, 0.1, "local", 0, 0.45], [0, 0.1, "sombra", 190, 0.45]];
+        const zonas = [[0.7, 1, "tophat", 30, 0.3], [0.7, 1, "tophat", 45, 0.3], [0.7, 1, "blanco", 215, 0.25], [0.7, 1, "blanco", 190, 0.25], [0.7, 1, "adapt", 0, 0.25], [0.7, 1, "local", 0, 0.25], [0.87, 1, "gris", 0, 0.72], [0.87, 1, "local", 0, 0.72], [0, 0.3, "blanco", 215, 0.3], [0, 0.1, "gris", 0, 0.45], [0, 0.1, "local", 0, 0.45], [0, 0.1, "sombra", 190, 0.45]];
         for (const [a, b, modo, umbral, x] of zonas) {
           const zona = franja(img, a, b, modo, umbral, x);
           const lin = lineasDe(zona); if (!lin.length || x >= 0.7) lin.push(zona); // zona angosta: también completa
