@@ -76,8 +76,8 @@ const INTENTOS_MAX = 5;          // intentos fallidos antes de bloquear
 const MINUTOS_BLOQUEO = 15;
 const RESPONSABLES = ["Gobernación", "Rentan", "Alcaldía", "Ciudadanía"];
 const TIPOS_AFECTACION = ["Deslizamiento / movimiento en masa", "Pérdida de banca", "Hundimiento de la vía",
-  "Socavación", "Caída de rocas", "Obstrucción de drenaje o alcantarilla", "Daño en puente o pontón",
-  "Daño en muro de contención", "Deterioro de la calzada (baches)", "Inundación", "Árbol caído", "Otro"];
+  "Socavación", "Obstrucción de drenaje o alcantarilla", "Daño en puente o pontón",
+  "Daño en muro de contención", "Deterioro de la calzada (baches)", "Inundación", "Otro"];
 const ESTADOS = ["Crítico", "No crítico"];
 const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 };
 
@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.6.0", gemini: !!prop_("GEMINI_API_KEY", true) });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.7.0", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida

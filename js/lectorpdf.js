@@ -34,6 +34,12 @@ const LectorPDF = (function () {
     return { doc, paginas };
   }
 
+  // Abre el PDF sin leer su texto (solo para sacar las imágenes)
+  async function abrirSoloImagenes(bytes) {
+    const lib = await cargarLib();
+    return { doc: await lib.getDocument({ data: bytes }).promise };
+  }
+
   // Dibuja una página como imagen JPEG (para la miniatura y la vista ampliada)
   async function dibujarPagina(doc, n, ancho) {
     const pag = await doc.getPage(n);
@@ -56,14 +62,12 @@ const LectorPDF = (function () {
     ["Pérdida de banca", /p[eé]rdidas?\s+(?:parcial(?:es)?\s+|total(?:es)?\s+)?(?:de\s+)?(?:la\s+)?banca|banca\s+perdida/],
     ["Deslizamiento / movimiento en masa", /deslizamiento|movimiento\s+en\s+masa|remoci[oó]n\s+en\s+masa/],
     ["Hundimiento de la vía", /hundimiento|asentamiento\s+de\s+la\s+(?:v[ií]a|banca|calzada)/],
-    ["Caída de rocas", /ca[ií]da\s+de\s+rocas|desprendimiento\s+de\s+rocas/],
     ["Daño en puente o pontón", /puente|pont[oó]n/],
     ["Daño en muro de contención", /muro\s+de\s+contenci[oó]n\s+(?:colapsad|fallad|da[nñ]ad)|falla\s+del?\s+muro/],
     ["Socavación", /socavaci[oó]n/],
     ["Obstrucción de drenaje o alcantarilla", /obstrucci[oó]n|alcantarilla|obras?\s+de\s+drenaje|sumidero/],
     ["Deterioro de la calzada (baches)", /baches?|deterioro\s+de\s+la\s+calzada|piel\s+de\s+cocodrilo/],
-    ["Inundación", /inundaci[oó]n/],
-    ["Árbol caído", /[aá]rbol(?:es)?\s+ca[ií]do/]
+    ["Inundación", /inundaci[oó]n/]
   ];
   function tipoDe(texto) {
     // «Puente Linda», «Puente Iglesias»…: nombres de lugares, no un daño en un puente
@@ -424,6 +428,6 @@ const LectorPDF = (function () {
     return out;
   }
 
-  return { cargarLib, abrir, dibujarPagina, imagenes, interpretar, tipoDe, resumir, resumenDePunto, prDe };
+  return { cargarLib, abrir, abrirSoloImagenes, dibujarPagina, imagenes, interpretar, tipoDe, resumir, resumenDePunto, prDe };
 })();
 if (typeof module !== "undefined") module.exports = LectorPDF;

@@ -8,8 +8,8 @@
   /* ======================= Catálogos ======================= */
   const TIPOS_AFECTACION = [
     "Deslizamiento / movimiento en masa", "Pérdida de banca", "Hundimiento de la vía",
-    "Socavación", "Caída de rocas", "Obstrucción de drenaje o alcantarilla", "Daño en puente o pontón",
-    "Daño en muro de contención", "Deterioro de la calzada (baches)", "Inundación", "Árbol caído", "Otro"
+    "Socavación", "Obstrucción de drenaje o alcantarilla", "Daño en puente o pontón",
+    "Daño en muro de contención", "Deterioro de la calzada (baches)", "Inundación", "Otro"
   ];
   const RESPONSABLES = ["Gobernación", "Rentan", "Alcaldía", "Ciudadanía"];
   const ESTADOS = ["Crítico", "No crítico"];
@@ -123,10 +123,13 @@
     if (vereda && r.vereda !== vereda) { r.vereda = vereda; cambio = true; }
     const v = info.via;
     if (v) {
-      const libre = r.viaAuto || (!String(r.codigoVia).trim() && !String(r.nombreTramo).trim());
-      if (libre) { r.codigoVia = v.codigo; r.nombreTramo = v.nombre; r.viaAuto = true; cambio = true; }
-      else if (!String(r.codigoVia).trim() && v.codigo) { r.codigoVia = v.codigo; cambio = true; } // ej. el sello trae el tramo pero no el código
-      if (r.tramoDe === "ocr" && v.nombre && LectorSello.parecido(v.nombre, r.nombreTramo) >= 0.6) { r.nombreTramo = v.nombre; r.tramoDe = "redvial"; cambio = true; }
+      // El tramo y el código oficial salen de la red vial según las coordenadas; solo lo que la persona escribió o eligió se respeta.
+      const propio = editado(r, "nombreTramo") || editado(r, "codigoVia") || r.tramoDe === "lista";
+      if (!propio) {
+        if (v.codigo && r.codigoVia !== v.codigo) { r.codigoVia = v.codigo; cambio = true; }
+        if (v.nombre && r.nombreTramo !== v.nombre) { r.nombreTramo = v.nombre; cambio = true; }
+        r.tramoDe = "redvial"; r.viaAuto = true;
+      } else if (!String(r.codigoVia).trim() && v.codigo) { r.codigoVia = v.codigo; cambio = true; }
       r.viaInfo = `vía ${v.orden.toLowerCase()} a ${Math.round(v.distancia)} m`;
     }
     if (cambio || v) repintarSinPerderFoco(r, repintar);
@@ -768,7 +771,33 @@
     pasarALista(quedan);
   });
 
+  /* El PDF solo se usa como contenedor de fotos: se sacan sus imágenes y cada una se lee como una foto
+     (sección 2), sin leer el texto del documento. */
   async function cargarPDF(f) {
+    if (!f) return;
+    if (f.type !== "application/pdf" && !/\.pdf$/i.test(f.name)) { msgPdf(f.name + " no es un PDF.", true); return; }
+    if (f.size > 40 * 1048576) { msgPdf(f.name + " supera 40 MB.", true); return; }
+    $("#p-archivo").textContent = f.name;
+    msgPdf("Sacando las imágenes del PDF…");
+    try {
+      const { doc } = await LectorPDF.abrirSoloImagenes(new Uint8Array(await f.arrayBuffer()));
+      const fotos = await LectorPDF.imagenes(doc, 60, 260);
+      if (!fotos.length) { msgPdf("El PDF no tiene imágenes (fotos) para leer.", true); return; }
+      const base = f.name.replace(/\.pdf$/i, "").replace(/[^\w.-]+/g, "_").slice(0, 40);
+      const archivos = [];
+      for (let i = 0; i < fotos.length; i++) {
+        const img = await new Promise((ok, no) => { const im = new Image(); im.onload = () => ok(im); im.onerror = no; im.src = fotos[i].dataUrl; });
+        const cv = document.createElement("canvas"); cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+        cv.getContext("2d").drawImage(img, 0, 0);
+        const blob = await new Promise((ok) => cv.toBlob(ok, "image/jpeg", 0.93));
+        archivos.push(new File([blob], `${base}_p${fotos[i].pagina}_${i + 1}.jpg`, { type: "image/jpeg" }));
+      }
+      msgPdf(`${archivos.length} imagen(es) sacadas del PDF. Se leen abajo, en «Carga fotográfica».`);
+      await agregarFotos(archivos);
+      const dest = document.querySelector("#seccion-fotos"); if (dest) dest.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (e) { msgPdf("No se pudo abrir " + f.name + ": " + (e.message || "PDF dañado o protegido") + ".", true); }
+  }
+  async function cargarPDFViejo(f) {
     if (!f) return;
     if (f.type !== "application/pdf" && !/\.pdf$/i.test(f.name)) { msgPdf(f.name + " no es un PDF.", true); return; }
     if (f.size > 20 * 1048576) { msgPdf(f.name + " supera 20 MB.", true); return; }
