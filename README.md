@@ -1,233 +1,168 @@
-# VIP-C · Visor interactivo de puntos críticos
+# Extractor Inteligente de Imágenes (PDF y Excel) - Versión 1.0
 
-Gobernación de Antioquia. Página web para celular y computador que registra los puntos críticos de la red vial de dos formas:
+Aplicación de escritorio nativa en Python con interfaz gráfica moderna (Tkinter/ttk) diseñada para **Windows 10 y Windows 11**. Permite analizar documentos PDF y hojas de cálculo Excel (XLSX, XLSM), recuperar todas las imágenes incrustadas en su resolución y formato original (sin capturas de pantalla), organizarlas por carpetas, deduplicarlas mediante SHA-256, previsualizarlas en una galería visual interactiva y generar informes CSV de auditoría.
 
-1. **Carga manual de datos**, cuando no hay evidencias fotográficas. Se puede usar la ubicación actual del celular.
-2. **Carga fotográfica y relleno automático**: se sube la foto y se leen de su sello la fecha, las coordenadas y la vía.
-3. **Subir PDF · lectura de PDF**: la misma sección de la carga manual, pero los campos se llenan desde el acta de visita técnica: fecha de la visita, código y nombre de la vía, coordenadas, municipio, tipo de afectación y, en Observaciones, un resumen de todo el PDF (redactado por Gemini con el servidor conectado; sin servidor, armado con las frases clave del acta). Si el acta trae varios tramos con coordenadas, se elige cada uno con sus botones y se agrega uno a uno o todos juntos. El PDF se guarda una sola vez en Drive y queda enlazado a todos sus registros.
+---
 
-En los dos casos, el municipio se deduce de las coordenadas y la subregión del municipio.
+## 🌟 Características Principales
+
+1. **Extracción Fiel de Documentos PDF:**
+   - Basado en el motor de alto rendimiento `PyMuPDF` (`fitz`).
+   - Recupera flujos de imágenes nativos (JPEG, PNG, etc.) con sus dimensiones originales.
+   - Manejo de transparencias y máscaras (`smask`).
+   - Mapeo exacto del número de página donde aparece cada elemento.
+   - Opción complementaria para renderizar páginas completas a alta resolución (DPI 150+).
+
+2. **Extracción Estructural de Hojas de Cálculo Excel (XLSX, XLSM):**
+   - Inspección directa de paquetes OpenXML mediante `zipfile` y `xml.etree.ElementTree`.
+   - Recupera los archivos binarios directamente de `xl/media/`.
+   - Detecta hojas visibles y hojas ocultas (`state="hidden"`).
+   - Analiza los archivos de dibujo (`drawing*.xml`) para determinar las coordenadas exactas de las celdas de inicio y fin (ej. `A1 -> C4`, `A8 -> E16`).
+   - Recupera el 100% de las imágenes internas, incluyendo aquellas no ancladas formalmente.
+
+3. **Clasificación Inteligente de Carreteras y Naturaleza:**
+   - Motor de visión computacional y colorimetría (espacios RGB y HSV) especializado en obras viales y paisajes.
+   - Detecta asfalto, calzadas, vegetación, follaje, taludes y cielo con cálculo de score de confianza (0 - 100%).
+   - Descarta automáticamente el ruido documental: logotipos corporativos (ej. *JERA*, *Rentan*), franjas y banners alargados de encabezados, firmas manuscritas y tablas de texto escaneadas.
+   - Filtro dedicado en la Galería (`Solo Carreteras / Naturaleza`) y opción de exportación selectiva que omite automáticamente cualquier elemento gráfico.
+
+4. **Detección Criptográfica de Duplicados (SHA-256):**
+   - Calcula el hash SHA-256 sobre el flujo binario crudo.
+   - Identifica duplicados exactos dentro y entre documentos.
+   - Opciones para exportar una sola copia física o conservar todas las copias en disco, manteniendo siempre el registro completo en los informes.
+
+5. **Interfaz Gráfica Moderna (Tkinter / ttk):**
+   - **No Bloqueante:** Procesamiento en segundo plano con `threading.Thread` y cola `queue.Queue`. La interfaz responde en todo momento.
+   - **Métricas en Vivo:** Indicadores en tiempo real de documentos, imágenes encontradas, imágenes únicas, duplicados y errores.
+   - **Galería Visual:** Miniaturas optimizadas con `Pillow` conservando relación de aspecto, badges inteligentes (`🌲 VIAL` / `🎨 GRÁFICO` / `DUPLICADA`), checkboxes para selección granular y botones de selección masiva.
+   - **Visor Ampliado:** Ventana modal emergente al hacer doble clic para inspección detallada, diagnóstico colorimétrico y exportación individual rápida.
+   - **Filtros Dinámicos:** Por tipo de contenido (Carreteras/Naturaleza vs Gráficos), documento, formato (PNG, JPG) y dimensiones mínimas.
+
+6. **Organización Jerárquica y Auditoría:**
+   - Carpetas sanitizadas para evitar errores de nomenclatura en Windows.
+   - Informes `manifest.csv` por documento y `resumen_general.csv` codificados en `utf-8-sig` para compatibilidad nativa e inmediata con Microsoft Excel.
+   - Botón directo para abrir la carpeta de resultados en el Explorador de Windows.
+
+---
+
+## 📁 Estructura del Proyecto
 
 ```
-Página (GitHub Pages)
-  ├─ Lectura del sello en el navegador (OCR, sin servidor)      ← siempre disponible
-  ├─ Guardar datos en el navegador del dispositivo               ← sin servidor
-  └─ Apps Script (opcional) ──▶ Gemini (lectura más precisa)
-                             ├─▶ Google Drive  (Raíz / Subregión / Municipio / foto.jpg)
-                             └─▶ Google Sheets (hoja Registro_VIPC, una fila por punto) ──▶ ArcGIS (CSV / GeoJSON)
+Version 1/
+│
+├── main.py                         # Punto de entrada de la aplicación
+├── requirements.txt                # Dependencias de Python
+├── README.md                       # Documentación técnica completa
+├── ExtractorImagenes.spec          # Archivo de especificación de PyInstaller
+│
+├── extractores/                    # Motores de análisis y extracción
+│   ├── __init__.py
+│   ├── modelo.py                   # Modelos de datos 'ImagenExtraida' y 'DocumentoAnalizado'
+│   ├── extractor_pdf.py            # Motor de extracción PyMuPDF
+│   └── extractor_excel.py          # Motor OpenXML/ZIP para hojas y celdas
+│
+├── procesamiento/                  # Lógica de negocio
+│   ├── __init__.py
+│   ├── duplicados.py               # Algoritmo de deduplicación SHA-256
+│   ├── filtros.py                  # Filtrado multicriterio de catálogo
+│   └── exportador.py               # Escritura en disco e informes CSV
+│
+├── interfaz/                       # Capa visual (Tkinter / ttk)
+│   ├── __init__.py
+│   ├── estilos.py                  # Paleta Slate/Blue, fuentes y temas ttk
+│   ├── componentes.py              # Tarjetas visuales de imagen y métricas
+│   ├── visor_imagen.py             # Ventana modal de vista ampliada
+│   ├── panel_documentos.py         # Selector de archivos y carpetas
+│   ├── galeria.py                  # Galería interactiva con scroll fluido
+│   ├── configuracion.py            # Panel de opciones de destino y exportación
+│   └── ventana_principal.py        # Ventana principal y cola de eventos
+│
+├── utilidades/                     # Funciones transversales
+│   ├── __init__.py
+│   ├── archivos.py                 # Sanitización Windows y apertura en Explorer
+│   ├── metadatos.py                # Formateo de bytes y cálculo SHA-256
+│   └── registro.py                 # Logging a consola y archivo
+│
+├── pruebas/                        # Scripts de pruebas automatizadas
+│   ├── test_extractor_pdf.py       # Prueba con PDF de inspección vial
+│   ├── test_extractor_excel.py     # Prueba con Excel de informe de avanzada
+│   ├── test_integracion_completa.py# Prueba de integración de extremo a extremo
+│   └── resultados_pruebas/         # Resultados de validaciones
+│
+├── resultados/                     # Directorio predeterminado de salida
+├── logs/                           # Archivos de registro (extractor.log)
+└── dist/                           # Ejecutable final compilado (.exe)
 ```
 
-## Estructura
+---
 
-```
-index.html                       Página
-css/style.css                    Estilos
-img/logo-gobernacion-antioquia.png   Logo con fondo transparente
-js/config.js                     ÚNICO archivo a editar al desplegar (URL y clave del Apps Script)
-js/app.js                        Formulario, lista de registros y guardado
-js/ocr.js                        Lectura del sello (fecha, coordenadas, tramo, código de vía)
-js/lectorpdf.js                  Lectura de actas en PDF (pdf.js)
-js/capas.js                      Consulta de la red vial y la división política (ArcGIS)
-js/municipios.js                 125 municipios con subregión y límites (DANE, MGN 2018)
-backend/Code.gs                  Apps Script (un solo archivo)
-backend/appsscript.json          Manifiesto del Apps Script
+## ⚙️ Instalación y Requisitos
+
+### Requisitos del Sistema
+- **Sistema Operativo:** Windows 10 o Windows 11 (64 bits).
+- **Python:** Versión 3.11, 3.12 o 3.13.
+
+### Instalación de Dependencias
+Abre una terminal (PowerShell o CMD) en la carpeta `Version 1`:
+```powershell
+pip install -r requirements.txt
 ```
 
-## Campos
+---
 
-| Campo | Cómo se llena |
-|---|---|
-| Fecha de la visita * | Del sello de la foto. Si no hay, del GPS interno o a mano |
-| Latitud / Longitud | Del sello (`6°10'42"N 75°9'57"W` o `+6,1694N -75,1630W`), del GPS de la foto, de «Usar mi ubicación actual» o a mano |
-| Código oficial de la vía | A mano (se lee del sello si aparece, ej. `60AN17`) |
-| Nombre del tramo | Del sello («Vía Granada - Guatapé» → `Granada - Guatapé`; las líneas «Antioquia» o «Colombia» se ignoran), de la fila del PDF o de la **lista desplegable (▾)**: arriba las vías cercanas al punto y abajo toda la red vial, con búsqueda por palabras. Al elegir se llenan el código y el nombre |
-| Subregión | Automática a partir del municipio |
-| Municipio * | Automático: por coordenadas; si la foto no trae coordenadas, por el nombre escrito en el sello (ej. «Grada el peñol» → El Peñol) |
-| Tipo de afectación * | Lista desplegable. Con el backend conectado, Gemini lo sugiere mirando la foto |
-| Responsable de la visita * | Gobernación · Rentan · Alcaldía · Ciudadanía |
-| Observaciones | Texto libre (sin relleno automático) |
+## 🚀 Ejecución de la Aplicación
 
-\* Obligatorio. Además se exige el **código de la vía o el nombre del tramo**, al menos uno de los dos.
+Para iniciar la aplicación directamente desde el código fuente:
+```powershell
+python main.py
+```
 
-Las listas (tipos de afectación y responsables) están al inicio de `js/app.js`. Si cambias tipos de afectación o responsables, cámbialos también al inicio de `backend/Code.gs`.
+### Guía Rápida de Uso:
+1. En la pestaña **Documentos y Configuración**, haz clic en `➕ Agregar Archivo(s)` o `📁 Agregar Carpeta` para cargar documentos PDF o Excel.
+2. Configura la carpeta de destino y las opciones deseadas (deduplicación, organización por carpetas, etc.).
+3. Presiona el botón azul **🔍 ANALIZAR DOCUMENTOS**.
+4. La aplicación analizará los documentos en segundo plano y te llevará a la pestaña **🖼 Galería de Imágenes**.
+5. Usa los filtros superiores para explorar las imágenes, haz doble clic en cualquier miniatura para verla en grande y selecciona cuáles deseas exportar.
+6. Presiona el botón verde **🚀 INICIAR EXTRACCIÓN**.
+7. Al finalizar, podrás abrir la carpeta con el botón **📂 Abrir Carpeta de Resultados**.
 
-## Acceso con usuario y contraseña
+---
 
-La página abre con una pantalla de **Ingreso**. Solo entran las personas registradas en la hoja **Usuarios** del Google Sheet. **Sin el Apps Script conectado nadie puede entrar**: la pantalla dice que el acceso no está configurado.
+## 🧪 Pruebas Realizadas con los Documentos de Referencia
 
-**Dar de alta a una persona** (en la hoja `Usuarios`, que se crea sola):
+La aplicación fue validada rigurosamente utilizando los dos documentos de prueba en el entorno:
 
-| Usuario | Nombre | Rol | Activo | ContraseñaNueva | Hash | Sal | UltimoIngreso |
-|---|---|---|---|---|---|---|---|
-| `jperez` | Juan Pérez | usuario | SI | `Clave-Segura-2026` | *(automático)* | *(automático)* | *(automático)* |
+1. **Documento PDF:** `C:\Users\juand\OneDrive\Escritorio\2026051307900.pdf`
+   - **Páginas analizadas:** 6 páginas completas.
+   - **Objetos de imagen detectados:** 26 objetos.
+   - **Imágenes únicas (SHA-256):** 16 imágenes únicas (fotografías de inspección vial, gráficos y encabezados repetidos).
+   - **Resultado:** 100% de éxito en extracción sin modificación del archivo original.
 
-- Escribe la contraseña en **ContraseñaNueva**. En el primer ingreso se cifra y **se borra de la hoja**, así que nadie la vuelve a ver. Para cifrarla de inmediato, ejecuta `actualizarUsuarios` en el editor del Apps Script.
-- **Dar de baja:** pon `NO` en **Activo**. Si esa persona tenía la sesión abierta, pierde el acceso en su siguiente acción.
-- **Cambiar contraseña** (o si alguien la olvidó): escribe una nueva en **ContraseñaNueva**.
-- La sesión dura **8 horas**. Después de **5 intentos fallidos**, el usuario queda bloqueado 15 minutos.
-- Cada registro guardado queda con el usuario que lo cargó (columna `RegistradoPor`).
-- **Cerrar todas las sesiones de una vez:** borra la propiedad `SESSION_SECRET` del Apps Script; se crea otra sola.
+2. **Documento Excel:** `C:\Users\juand\OneDrive\Escritorio\EI-F140-13 Informe de avanzada Molino Viejo - Santo Domingo.xlsx`
+   - **Hojas detectadas:** 4 hojas (incluyendo la hoja oculta `Versión`).
+   - **Apariciones de imagen en celdas:** 8 instancias detectadas con precisión:
+     - Hoja 1 (`EI-F140-13`): Celdas `A1 -> C4` (Logotipo PNG).
+     - Hoja 2 (`EI-F140-13.`): 6 fotografías de alta resolución en celdas `A8->E16`, `E8->K16`, `K8->P16`, `A16->E25`, `E16->K25`, `K16->P25`, más el logotipo en `B1->D4`.
+   - **Imágenes únicas internas:** 7 archivos de imagen originales en `xl/media/`.
+   - **Resultado:** 100% de éxito en detección de hojas, celdas y extracción de fotos en calidad original (1600x1200 px).
 
-**Registro propio (botón «Crear cuenta»):** cada persona crea su usuario y contraseña y confirma su correo con un código. **El administrador no interviene:**
+Para re-ejecutar las pruebas en cualquier momento:
+```powershell
+python pruebas/test_extractor_pdf.py
+python pruebas/test_extractor_excel.py
+python pruebas/test_integracion_completa.py
+```
 
-| Correo | Resultado |
-|---|---|
-| `@antioquia.gov.co` | Código al correo → entra. |
-| Empresa ya autorizada y vigente | Código al correo → entra. |
-| Empresa nueva | La persona escribe el correo de **su supervisor en la Gobernación**. Tras confirmar su código, al supervisor le llega un correo donde elige con un clic **a quién** (solo esa persona o toda la empresa) y **por cuánto tiempo** (1 día, 30 días o 12 meses), o **Rechazar**. La persona recibe un correo con la respuesta y la fecha de vencimiento. |
-| Correo personal (gmail, hotmail, outlook…) | **Rechazado** siempre. |
+---
 
-- «Solo esta persona» guarda su fecha en la columna **Vence** de `Usuarios`; al vencer, al supervisor le llegan botones para renovar (1 día, 30 días, 12 meses).
-- «Toda la empresa» agrega su dominio a la hoja `EmpresasAutorizadas` con la fecha **Vence** elegida y **AutorizadaPor**; sus demás empleados entran solos con código, y las solicitudes pendientes de esa empresa quedan aprobadas.
-- Al vencer, sus usuarios no pueden entrar y al supervisor le llega un botón **Renovar** (máximo un correo al día por empresa).
-- Los botones del correo funcionan 7 días y están firmados: no se pueden falsificar ni reutilizar para otra persona.
-- La hoja `EmpresasAutorizadas` se llena sola; solo la tocas si quieres corregir algo (por ejemplo, `NO` en Activo corta el acceso de una empresa al instante).
-- **Duración de la autorización de una empresa:** propiedad `DURACION_EMPRESA` (`12 meses` por defecto; acepta `90 dias`, `1 hora`, `30 minutos`). Con minutos u horas, el vencimiento es a la hora exacta. Usa tiempos cortos solo para probar.
-- **Código en cada ingreso (verificación en dos pasos):** activado por defecto. Al ingresar con usuario y contraseña llega un código de 6 dígitos al correo (vence en 10 minutos). Las cuentas creadas a mano sin correo entran solo con contraseña. Para desactivarlo: propiedad `CODIGO_EN_CADA_INGRESO = NO`.
-- **Modo prueba:** propiedad `MODO_PRUEBA = SI` permite probar con un solo Gmail: `tucorreo+gob@gmail.com` = Gobernación; `tucorreo+empnorte1@gmail.com` = empleado de la empresa «empnorte». Bórrala al terminar.
-- Propiedad recomendada: `WEBAPP_URL` = la URL `/exec` del Apps Script (asegura que los botones del correo apunten bien).
-- Cuota de Google: una cuenta Gmail gratuita envía hasta ~100 correos al día (cada registro usa 1–3). Con Google Workspace el límite es mucho mayor.
+## 📦 Generación del Ejecutable Autónomo (PyInstaller)
 
-**Qué protege y qué no:** los datos, el guardado y la lectura con Gemini exigen sesión válida, y eso lo controla el servidor. El diseño de la página (HTML y JS) sigue siendo público en GitHub Pages, aunque sin sesión no muestra el formulario ni permite usarlo.
+Para compilar la aplicación en un único archivo ejecutable `.exe` independiente que no requiere tener Python instalado:
 
-La lectura de fotos en el navegador tarda 1 o 2 segundos por foto. La primera vez descarga el lector, unos 5 MB.
+```powershell
+pip install -r requirements-dev.txt
+python -m PyInstaller ExtractorImagenes.spec --noconfirm
+```
 
-## Conectar el backend (Drive + Sheets)
-
-### 1. Clave de Gemini
-Entra a https://aistudio.google.com/apikey y crea una API key. La clave solo se guarda en el Apps Script, nunca en la página.
-
-### 2. Drive y Sheets
-1. Crea una carpeta en Drive y copia su ID: es lo que va después de `/folders/` en la URL.
-2. Crea un Google Sheet vacío y copia su ID: es lo que va entre `/d/` y `/edit` en la URL.
-
-La hoja `Registro_VIPC` se crea sola.
-
-### 3. Apps Script
-1. En https://script.google.com, crea un **Proyecto nuevo** y pega `backend/Code.gs`.
-2. En **Configuración del proyecto**, activa «Mostrar el archivo de manifiesto» y pega `backend/appsscript.json`.
-3. En **Propiedades del script**, agrega:
-
-   | Propiedad | Valor |
-   |---|---|
-   | `GEMINI_API_KEY` | la clave del paso 1 |
-   | `ROOT_FOLDER_ID` | ID de la carpeta |
-   | `SPREADSHEET_ID` | ID del Sheet |
-   | `ADMIN_TOKEN` | una clave larga inventada: para anular registros y exportar a ArcGIS |
-   | `APP_TOKEN` | opcional (el acceso ya lo controlan los usuarios) |
-   | `GEMINI_MODEL` | opcional; por defecto `gemini-3.8-flash` |
-
-4. Ejecuta `probarConfiguracion` y acepta los permisos. Esto crea las hojas `Registro_VIPC` y `Usuarios`.
-5. En la hoja `Usuarios`, da de alta al menos tu propio usuario (ver «Acceso con usuario y contraseña»).
-6. Ve a **Implementar → Nueva implementación → Aplicación web**, con «Ejecutar como: Yo» y acceso para «Cualquier usuario». Copia la URL `/exec`.
-
-### 4. Página
-En `js/config.js`, pon la URL `/exec` en `API_URL` (y en `TOKEN` la clave de `APP_TOKEN`, solo si la configuraste). Haz commit.
-
-Desde ese momento la página pide usuario y contraseña. **Guardar datos** guarda en Drive y Sheets, y la lectura usa Gemini; si Gemini falla, se usa el lector del navegador.
-
-> ¿Ya tenías la versión anterior conectada? Esta versión escribe en una hoja nueva, `Registro_VIPC`, con las columnas nuevas. La hoja anterior queda intacta. Después de pegar el nuevo `Code.gs`, haz **Implementar → Gestionar implementaciones → Editar → Versión nueva**.
-
-## Envío automático a ArcGIS
-
-Al tocar **Guardar datos**, cada registro (manual, foto o PDF) se guarda en Drive y Sheets y luego se agrega como punto a la capa de ArcGIS Online **Inventario_Avanzadas**. La foto o el PDF van como adjunto del punto.
-
-| Campo ArcGIS | Dato de VIP-C |
-|---|---|
-| ARCHIVO | Nombre de la foto o del PDF en Drive (máx. 50 caracteres, conserva la extensión) |
-| COD_VIA / NOM_VIA | Código oficial de la vía / Nombre del tramo |
-| MUNICIPIO / SUBREGION | Municipio / Subregión |
-| TIPO_AFEC | Tipo de afectación |
-| OBSERV | Observaciones o resumen del PDF (máx. 254 caracteres; el texto completo queda en Sheets) |
-| FECHA | Fecha de la visita |
-| LAT_DEC / LON_DEC + punto en el mapa | Coordenadas en grados decimales |
-| FUENTE | Forma de carga y origen de las coordenadas, ej. «Carga fotográfica (Sello foto)» |
-| Adjunto del punto | La foto o el PDF |
-
-El código lee los campos de la capa antes de enviar: si la capa cambia, solo manda los campos que existan y recorta cada texto a su largo.
-`ensayarArcgis` crea un punto de prueba en La Alpujarra con una imagen adjunta; `borrarEnsayosArcgis` lo borra.
-
-- En la hoja `Registro_VIPC`, las columnas **ArcGIS_FID** y **ArcGIS_Estado** muestran si cada registro llegó.
-- Si ArcGIS falla, el registro queda guardado en Sheets como pendiente. Ejecuta `reenviarArcgis` en el editor para reenviar todos los pendientes.
-- `probarArcgis` revisa la conexión con la capa sin crear nada.
-- Si la capa no es editable en público, agrega las propiedades `ARCGIS_USUARIO` y `ARCGIS_CLAVE` (una cuenta de ArcGIS Online con permiso de edición). `ARCGIS_URL` permite cambiar de capa.
-- Anular un registro en VIP-C no lo borra de ArcGIS. Para borrarlo de ArcGIS se usa la sección **4. Puntos guardados** (ver abajo).
-- Exportar todo: `URL_EXEC?accion=listar&formato=csv&admin=TU_ADMIN_TOKEN` (o `formato=geojson`).
-
-## Capas de referencia (solo lectura)
-
-La página consulta dos capas públicas de ArcGIS Online, directamente desde el navegador:
-
-| Capa | Link | Para qué |
-|---|---|---|
-| Red vial (Circular 10) | `.../rest/services/R10/FeatureServer` (1 primaria, 2 secundaria, 3 terciaria) | Con las coordenadas, busca la vía más cercana (máx. 200 m) y llena **Código oficial de la vía** y **Nombre del tramo**. Al escribir un código se llena el nombre y al revés; las dos casillas sugieren los valores de la red vial. |
-| División política de Antioquia | `.../rest/services/División_política_de_Antioquia/FeatureServer` (2 veredas, 3 municipios, 4 subregiones) | Con las coordenadas, llena **Municipio** y **Subregión** con los límites oficiales y muestra la **vereda** (se guarda en la columna Vereda del Sheet). |
-
-- Solo se llenan campos vacíos o que se llenaron solos; lo que la persona escribió no se cambia.
-- Los nombres de las columnas de cada capa se detectan solos. Para ver cuáles se detectaron: abre la consola del navegador (F12) y escribe `Capas.diagnostico()`.
-- Si las capas no responden, la página sigue funcionando con los límites del DANE que trae incluidos.
-- Los links están al inicio de `js/capas.js`.
-
-## Notas
-- Los límites municipales vienen del Marco Geoestadístico Nacional 2018 del DANE, simplificados. Cerca de un límite el municipio sugerido puede ser el vecino; siempre se puede corregir a mano.
-- La lectura del sello está ajustada a Antioquia: latitud 5° a 9° N y longitud 73° a 77° W. Si un sello no se lee completo, la tarjeta queda en **Revisar** y dice qué falta.
-- Anular un registro guardado (con backend): `POST {accion:"anular", sesion, adminToken, id, motivo}`. La fila queda como `ANULADO` y la foto va a la papelera de Drive.
-
-## Dirección web y aplicación de escritorio (v8.0)
-
-**Página web (gratis):** Cloudflare Pages con el proyecto llamado `vip-c` publica en **https://vip-c.pages.dev**
-(build `sh construir.sh`, carpeta `dist`). Para tener una dirección de ArcGIS como la de Canteras, se crea en
-Experience Builder una experiencia «VIP-C» con un widget **Insertar (Embed)** que apunta a `https://vip-c.pages.dev`;
-`_headers` ya permite que ArcGIS la muestre.
-
-**App instalable (PWA):** `manifest.webmanifest`, `sw.js` y `js/app-instalable.js`. En Chrome o Edge aparece el botón
-«Instalar app» (arriba, junto a «Cerrar sesión») y VIP-C queda como programa con su ícono. El service worker nunca
-guarda en caché las lecturas, el guardado ni ArcGIS.
-
-**Instalador de Windows:** carpeta `escritorio/` (Electron). Abre la página oficial en una ventana propia: el código
-de la app no va dentro del instalador y siempre se usa la última versión publicada. La dirección se cambia en
-`escritorio/config.json`. Construir: `cd escritorio && npm install && npm run instalador` (en Windows; en Linux
-necesita Wine). Salen `dist/VIP-C-Instalador-1.1.0.exe` y `dist/VIP-C-Portable-1.1.0.exe`.
-
-## Protección del código (v8.4)
-
-- `construir.sh` ofusca todo el JavaScript (incluido `config.js`) con `ofuscar.json`: cadenas cifradas (RC4), flujo de
-  control alterado, código señuelo, autodefensa (deja de funcionar si se «embellece») y bloqueo contra el depurador.
-- **Bloqueo de dominio:** el código solo funciona en `vip-c.pages.dev` (y sus subdominios de vista previa). Copiado a
-  otro sitio, la página queda en blanco. Si se cambia de dirección, actualizar `domainLock` en `ofuscar.json`.
-- `_headers` + `robots.txt`: los buscadores no indexan ni archivan la página.
-- Programa de escritorio: sin herramientas de desarrollador, se cierra si se abre con opciones de depuración y el
-  ejecutable tiene los «fuses» de Electron que impiden usarlo para correr otro código.
-
-## Descarga del instalador desde la página (v8.5)
-
-El botón «Instalar software» descarga `VIP-C-Instalador.exe` desde la misma página (`descargas/`), sin repositorios
-públicos: el archivo está en partes de 20 MB (Cloudflare acepta hasta 25 MB por archivo), el navegador las une y
-comprueba la huella SHA-256. Para publicar un instalador nuevo: `cd escritorio && npm run instalador && node publicar-instalador.js`
-y luego `git push`.
-
-## Lectura con IA, tramos y eliminación en ArcGIS (v8.8 · Apps Script 7.5.0)
-
-**Lectura de fotos.** Gemini es el lector principal: recibe la foto completa y una ampliación de la franja inferior
-(donde va el sello). El lector del navegador muestra un resultado rápido y, cuando llega Gemini, se corrige todo lo que
-se llenó solo (nunca lo que la persona escribió). Si las dos lecturas no coinciden (más de 100 m o fechas distintas), o si
-Gemini no está segura, se pide una **lectura precisa** (Gemini razona dígito por dígito). «Volver a leer la foto» usa
-siempre la lectura precisa. La tarjeta dice «Leído con IA» o «Revisado con IA». Propiedad opcional `GEMINI_MODEL_PRECISO`
-para usar otro modelo en esa relectura. Sellos reconocidos: `6° 38' 21" N, 74° 53' 24" W`, `N 6° 22' 10" W 75° 42' 28"`
-y `6.40101N 76.04736W` (con la línea «Antioquia» antes del tramo).
-
-**Registros fotográficos en tabla** (ej. «Anexo A. Registro fotográfico de pérdidas de banca»: Municipio | Punto | Vía |
-Abscisa | Latitud | Longitud): cada fila es un punto con su propio municipio, nombre y código de la vía, abscisa y
-coordenadas (también `6.4010N 76.0473W` o `75.8910` sin la W). La fecha se toma del sello de la foto de cada punto.
-Se leen hasta 60 fotos por PDF.
-
-**4. Puntos guardados · eliminar en ArcGIS.** Lista los puntos guardados (los 150 más recientes, con búsqueda por ID,
-municipio, tramo, código o FID). **Eliminar** pide un motivo y:
-1. guarda una copia completa del punto (atributos y ubicación) en la hoja **Eliminados** del Sheet;
-2. lo borra de la capa de ArcGIS (`deleteFeatures`);
-3. marca el registro como `ELIMINADO` en `Registro_VIPC` (fecha, motivo y quién) y manda la foto a la papelera de Drive.
-
-Quién puede: las personas con **Rol = admin** en la hoja `Usuarios` eliminan cualquier punto; las demás, solo los que
-registraron. Si ArcGIS responde que no se puede borrar, la capa necesita la operación «Eliminar» activa o las propiedades
-`ARCGIS_USUARIO` y `ARCGIS_CLAVE` de una cuenta con permiso de edición. Para recuperar un punto: en el editor del Apps
-Script, cambia `ID_O_FID` en `restaurarPuntoEliminado` y ejecútala (crea el punto de nuevo con su foto).
+El archivo ejecutable generado se encuentra en:
+`C:\Users\juand\OneDrive\Escritorio\Programacion\Estractor de imagenes PDF y Excel\Version 1\dist\ExtractorImagenes.exe`
