@@ -853,13 +853,13 @@
         const n = creados.filter(terminado).length; msgPdf(`${archivos.length} imagen(es) del PDF · leyendo sellos (${n} de ${archivos.length})…`);
         await new Promise((ok) => setTimeout(ok, 500));
       }
-      // Se descarta solo si la IA las leyó y no encontró sello; si solo las leyó el lector del navegador no hay certeza y quedan para revisar
-      const sinSello = creados.filter((r) => !r.fecha && r.iaSinSello && items.includes(r));
+      // El sello de campo siempre trae FECHA + coordenadas. Una imagen sin fecha es un mapa, una captura o un logo (aunque tenga coordenadas escritas, como los mapas de ArcGIS/Google Earth): se descarta
+      const sinSello = creados.filter((r) => !r.fecha && !editado(r, "fecha") && items.includes(r));
       sinSello.forEach((r) => { if (r.urlOriginal) URL.revokeObjectURL(r.urlOriginal); });
       items = items.filter((x) => !sinSello.includes(x));
       render();
       const buenas = creados.length - sinSello.length;
-      msgPdf(`${buenas} foto(s) con sello leídas${sinSello.length ? ` · ${sinSello.length} imagen(es) sin sello descartadas (mapas, capturas o logos)` : ""}.`, !buenas);
+      msgPdf(`${buenas} foto(s) con sello leídas${sinSello.length ? ` · ${sinSello.length} imagen(es) sin sello (sin fecha) descartadas: mapas, capturas o logos` : ""}.`, !buenas);
     } catch (e) { msgPdf("No se pudo abrir " + f.name + ": " + (e.message || "PDF dañado o protegido") + ".", true); }
   }
   async function cargarPDFViejo(f) {
