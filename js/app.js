@@ -510,10 +510,11 @@
   const pausa = (ms) => new Promise((ok) => setTimeout(ok, ms));
   async function postIA(accion, datos, sigue) {
     let r = null;
-    for (let i = 0; i < 3; i++) {
+    const intentos = accion === "leer" ? 2 : 3; // con Gemini sin cupo no se insiste: se pasa al OCR de Google
+    for (let i = 0; i < intentos; i++) {
       r = await ColaIA(() => (sigue && !sigue() ? { status: "omitido" } : Api.post(accion, datos)));
       if (!r || r.status === "success" || r.status === "omitido" || !r.reintentar) break;
-      await pausa(3000 * (i + 1) + Math.random() * 1000); // Gemini pidió esperar: se reintenta solo
+      await pausa(2500 * (i + 1) + Math.random() * 800); // Gemini pidió esperar: se reintenta solo
     }
     if (r && r.status !== "success" && r.status !== "omitido") console.warn("[VIP-C IA]", accion, r.message);
     return r || { status: "error", message: "sin respuesta" };
@@ -521,11 +522,27 @@
   const deIA = (s) => ({ fecha: s.fecha, fechaTexto: s.fechaTexto, latitud: s.latitud, longitud: s.longitud, latitudDMS: s.latitudDMS, longitudDMS: s.longitudDMS,
     tramo: LectorSello.corregirTramo(s.tramo || ""), codigoVia: s.codigoVia, municipioTexto: s.municipio, tipoAfectacion: s.tipoAfectacion,
     seguridad: s.seguridad || "", preciso: !!s.preciso, legible: !!s.selloLegible });
+  // Si Gemini no tiene cupo, no se insiste: se pasa directo al OCR de Google (Drive), que no usa esa cuota
+  let geminiCaidoHasta = 0;
+  const geminiCaido = () => Date.now() < geminiCaidoHasta;
+  async function ocrGoogle(r) {
+    const s = await postIA("ocrGoogle", { base64: r.base64Lectura || r.base64, recorte: r.recorte || "" });
+    if (s.status !== "success" || !s.texto) { if (s.message) r.errorIA = (r.errorIA ? r.errorIA + " · " : "") + s.message; return null; }
+    const x = LectorSello.interpretar(s.texto);
+    if (!x.fecha && x.latitud == null) return null;
+    return Object.assign(x, { ocrGoogle: true });
+  }
   function pedirIA(r, preciso) {
     if (!HAY_BACKEND) return Promise.resolve(null);
+    if (geminiCaido()) return ocrGoogle(r).catch(() => null);
     return Promise.race([
       postIA("leer", { base64: r.base64Lectura || r.base64, recorte: r.recorte || "", mimeType: "image/jpeg", preciso: !!preciso })
-        .then((s) => { if (s.status === "success") return deIA(s); r.errorIA = s.message || "sin respuesta"; return null; }).catch(() => null),
+        .then((s) => {
+          if (s.status === "success") return deIA(s);
+          r.errorIA = s.message || "sin respuesta";
+          if (/429|cuota|quota|limitando/i.test(r.errorIA)) geminiCaidoHasta = Date.now() + 5 * 60000; // 5 minutos sin insistir
+          return preciso ? null : ocrGoogle(r);
+        }).catch(() => null),
       new Promise((ok) => setTimeout(() => ok(null), preciso ? 70000 : 45000)) // máximo 45 s (70 s en la lectura precisa), con reintentos
     ]);
   }
@@ -559,7 +576,7 @@
       r.municipio = ""; r.municipioAuto = true; completarDesdeCoordenadas(r);
       if (!r.municipio) [r.municipio, r.subregion] = antes; // fuera de los límites incluidos: se deja el que tenía
     }
-    r.leidoPor = x.preciso ? "ia-preciso" : "ia";
+    r.leidoPor = x.ocrGoogle ? "google" : x.preciso ? "ia-preciso" : "ia";
     return cambio || coords;
   }
   // Estado de la tarjeta y aviso, según lo que quedó leído
@@ -577,7 +594,7 @@
   // ¿Hace falta una segunda lectura precisa? (la IA no leyó todo, no está segura o no coincide con el lector del navegador)
   function hayQueVerificar(gem, ocr) {
     if (!gem) return false;
-    if (gem.preciso) return false;
+    if (gem.preciso || gem.ocrGoogle) return false;
     if (gem.latitud == null || !gem.fecha) return true;
     if (gem.seguridad === "baja") return true;
     if (ocr && ocr.latitud != null && !ocr.coordDudosa && metros(gem, ocr) > 100) return true;
@@ -641,7 +658,7 @@
     }
     r.selloLegible = !!(d.fecha && d.latitud != null);
     r.iaSinSello = !!gem && !gem.fecha && gem.latitud == null; // la IA miró la imagen y no vio sello
-    r.leidoPor = deGem ? (gem.preciso ? "ia-preciso" : "ia") : (ocr ? "lector" : "");
+    r.leidoPor = deGem ? (gem.ocrGoogle ? "google" : gem.preciso ? "ia-preciso" : "ia") : (ocr ? "lector" : "");
     r.confirmandoIA = !!falta && primero[0] === "ocr"; // se muestra lo del lector mientras llega la IA
     evaluar(r, error);
     actualizar(r);
@@ -1151,7 +1168,7 @@
         <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}"${r.errorIA ? ` title="IA: ${esc(r.errorIA)}"` : ""}>${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
-          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", lector: "Leído con el lector del navegador" + (r.errorIA ? " · IA no disponible: " + motivoIA(r.errorIA) : "") }[r.leidoPor] || ""}</div>` : ""}
+          : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", google: "✓ Leído con el lector de Google", lector: "Leído con el lector del navegador" + (r.errorIA ? " · IA no disponible: " + motivoIA(r.errorIA) : "") }[r.leidoPor] || ""}</div>` : ""}
         <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
         ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">
@@ -1562,7 +1579,7 @@
     const caja = $("#ia-estado");
     try {
       const r = await Api.post("estadoIA", {});
-      if (r && r.status === "success" && r.ok === false) { caja.textContent = "La IA (Gemini) no está respondiendo: " + r.motivo + ". Mientras tanto las fotos se leen con el lector del navegador, que falla con sellos pequeños. Avisa al administrador."; caja.hidden = false; }
+      if (r && r.status === "success" && r.ok === false) { geminiCaidoHasta = Date.now() + 10 * 60000; caja.textContent = "La IA (Gemini) no está respondiendo: " + r.motivo + ". Mientras tanto las fotos se leen con el lector de Google (si está activado el servicio Drive en Apps Script) o con el del navegador, que falla con sellos pequeños. Avisa al administrador."; caja.hidden = false; }
       else caja.hidden = true;
     } catch (_) { caja.hidden = true; }
   }

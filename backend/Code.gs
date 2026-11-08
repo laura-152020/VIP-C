@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.8.1", gemini: !!prop_("GEMINI_API_KEY", true) });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.9.0", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -117,6 +117,7 @@ function doPost(e) {
     const usuario = validarSesion_(payload.sesion);
     if (payload.accion === "sesion") return json_({ status: "success", usuario: usuario.usuario, nombre: usuario.nombre, rol: usuario.rol });
     if (payload.accion === "leer") return json_(leerSello_(payload));
+    if (payload.accion === "ocrGoogle") return json_(ocrGoogle_(payload));
     if (payload.accion === "estadoIA") return json_(estadoIA_());
     if (payload.accion === "leerPdf") return json_(leerPdf_(payload));
     if (payload.accion === "leerFotos") return json_(leerFotos_(payload));
@@ -1646,6 +1647,37 @@ function desbloquearUsuario() {
 /* ======================= Prueba de Gemini ======================= */
 /** Ejecútala desde el editor (Ejecutar → probarGemini) si la página dice «Gemini no respondió».
  *  Muestra en el registro qué modelo se usa y la respuesta exacta de Gemini. */
+/** OCR de Google Drive: no usa la cuota de Gemini. Sube la imagen como documento de Google (Drive hace el OCR), lee el texto y borra el archivo.
+ *  Requiere activar el servicio «Drive API» en Apps Script (Servicios → + → Drive API), que habilita la API para este proyecto. */
+function ocrGoogle_(payload) {
+  const imagenes = [payload.recorte, payload.base64].filter(function (s) { return typeof s === "string" && s.length > 100; });
+  if (!imagenes.length) throw new Error("No llegó la imagen.");
+  const token = ScriptApp.getOAuthToken(), auth = { Authorization: "Bearer " + token };
+  let texto = "";
+  for (let i = 0; i < imagenes.length; i++) {
+    let id = "";
+    try {
+      const borde = "vipc" + Date.now() + i;
+      const meta = JSON.stringify({ name: "vipc_ocr_tmp", mimeType: "application/vnd.google-apps.document" });
+      const cabeza = Utilities.newBlob("--" + borde + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + meta + "\r\n--" + borde + "\r\nContent-Type: image/jpeg\r\n\r\n").getBytes();
+      const cola = Utilities.newBlob("\r\n--" + borde + "--").getBytes();
+      const cuerpo = cabeza.concat(Utilities.base64Decode(imagenes[i])).concat(cola);
+      const up = UrlFetchApp.fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&ocrLanguage=es&fields=id", {
+        method: "post", contentType: "multipart/related; boundary=" + borde, payload: cuerpo, headers: auth, muteHttpExceptions: true });
+      if (up.getResponseCode() !== 200) {
+        if (up.getResponseCode() === 403) return { status: "error", message: "Falta activar el servicio Drive API en Apps Script (Servicios → + → Drive API)." };
+        continue;
+      }
+      id = JSON.parse(up.getContentText()).id;
+      const ex = UrlFetchApp.fetch("https://www.googleapis.com/drive/v3/files/" + id + "/export?mimeType=text%2Fplain", { headers: auth, muteHttpExceptions: true });
+      if (ex.getResponseCode() === 200) texto += "\n" + ex.getContentText();
+    } catch (e) { /* se prueba con la otra imagen */ }
+    finally { if (id) { try { UrlFetchApp.fetch("https://www.googleapis.com/drive/v3/files/" + id, { method: "delete", headers: auth, muteHttpExceptions: true }); } catch (_) {} } }
+    if (/\d{1,2}\s*[°º]?\s*\d{1,2}.{0,6}\d{2,3}\s*[°º]?/.test(texto) && /\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}|\d{4}/.test(texto)) break; // ya trae fecha y coordenadas
+  }
+  return { status: "success", texto: texto.replace(/\uFEFF/g, "").trim() };
+}
+
 /** Estado real de Gemini para la página (se recuerda 10 minutos para no gastar cuota). */
 function estadoIA_() {
   const cache = CacheService.getScriptCache(), previo = cache.get("estado_ia");
