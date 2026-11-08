@@ -246,3 +246,26 @@ img{-webkit-user-drag:none}
 .dialogo__caja p{margin:0;font-size:14px}
 
 .ia-estado { margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; border: 1px solid var(--line, #3a4a40); background: rgba(240, 180, 40, .10); color: #f0c35a; font-size: .92rem; }
+
+/* ---------- Inicio: tres cajas y vistas por sección ---------- */
+.cajas{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+.caja{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;display:grid;gap:10px;align-content:start;grid-template-rows:auto auto 1fr auto}
+.caja h2{font:700 20px/1.15 var(--f-display);margin:0}
+.caja p{margin:0;color:var(--muted)}
+.caja .btn{justify-self:stretch;text-align:center}
+.inicio__extra{margin-top:14px!important}
+.volver{display:none}
+#app[data-vista="inicio"] > :not(.intro){display:none!important}
+#app:not([data-vista="inicio"]) .inicio{display:none}
+#app:not([data-vista="inicio"]) .volver{display:block}
+#app[data-vista="manual"] > .panel:not(#manual),
+#app[data-vista="fotos"] > .panel:not(#seccion-fotos),
+#app[data-vista="pdf"] > .panel:not(#pdfs):not(#seccion-fotos),
+#app[data-vista="guardados"] > .panel:not(#guardados){display:none}
+#app[data-vista="pdf"] #seccion-fotos .panel__head,
+#app[data-vista="pdf"] #seccion-fotos .drop,
+#app[data-vista="pdf"] #seccion-fotos .pegar,
+#app[data-vista="pdf"] #seccion-fotos #f-msg{display:none}
+#app[data-vista="pdf"] #seccion-fotos{background:none;border:0;padding:0}
+#app[data-vista="guardados"] > .lista{display:none}
+@media (max-width:760px){.cajas{grid-template-columns:1fr}}

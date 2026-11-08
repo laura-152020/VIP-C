@@ -8,7 +8,7 @@
   <!-- Seguridad: solo se cargan scripts y conexiones de estos orígenes -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' blob:; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://services5.arcgis.com https://cdn.jsdelivr.net data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=8.21">
+  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=8.23">
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#283517">
   <link rel="apple-touch-icon" href="img/app/apple-touch-icon.png">
@@ -16,12 +16,12 @@
   <meta name="apple-mobile-web-app-title" content="VIP-C">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/style.css?v=8.21">
+  <link rel="stylesheet" href="css/style.css?v=8.23">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar__in">
-      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=8.21" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
+      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=8.23" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
       <div class="marca">
         <div class="marca__sigla">VIP-C</div>
         <div class="marca__nombre">Visor interactivo de puntos críticos</div>
@@ -93,15 +93,36 @@
     </div>
   </main>
 
-  <main class="vista" id="app" hidden>
+  <main class="vista" id="app" data-vista="inicio" hidden>
     <section class="intro">
-      <h1>Carga e inventario fotográfico</h1>
-      <p>Sube la información de las visitas de una de estas tres formas:</p>
-      <ol class="modos">
-        <li><a href="#manual"><b>Carga manual de datos</b></a> <span>si no tienes evidencias fotográficas.</span></li>
-        <li><a href="#seccion-fotos"><b>Carga fotográfica</b></a> <span>sube una foto y la información se llena automáticamente.</span></li>
-        <li><a href="#pdfs"><b>Subir PDF</b></a> <span>sube el acta de visita técnica: se sacan las fotos del PDF y cada una se lee como una foto.</span></li>
-      </ol>
+      <div class="inicio">
+        <h1>Carga e inventario fotográfico</h1>
+        <p>Sube la información de las visitas de una de estas tres formas:</p>
+        <div class="cajas">
+          <article class="caja">
+            <span class="num" aria-hidden="true">1</span>
+            <h2>Carga manual de datos</h2>
+            <p>Si no tienes evidencias fotográficas.</p>
+            <button type="button" class="btn btn--primary" data-vista="manual">Ir a carga manual</button>
+          </article>
+          <article class="caja">
+            <span class="num" aria-hidden="true">2</span>
+            <h2>Carga fotográfica</h2>
+            <p>Sube una foto y la información se llena automáticamente.</p>
+            <button type="button" class="btn btn--primary" data-vista="fotos">Ir a carga fotográfica</button>
+          </article>
+          <article class="caja">
+            <span class="num" aria-hidden="true">3</span>
+            <h2>Subir PDF</h2>
+            <p>Sube el acta de visita técnica: se sacan las fotos del PDF y cada una se lee como una foto.</p>
+            <button type="button" class="btn btn--primary" data-vista="pdf">Ir a subir PDF</button>
+          </article>
+        </div>
+        <p class="inicio__extra"><button type="button" class="enlace" data-vista="guardados">Ver mis puntos guardados / eliminar en ArcGIS</button></p>
+      </div>
+      <div class="volver">
+        <button type="button" class="btn" data-vista="inicio">← Volver al inicio</button>
+      </div>
     </section>
 
     <!-- 1. CARGA MANUAL -->
@@ -240,13 +261,14 @@
 
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js" integrity="sha384-KRanV2NRwHPanp7iM6nlLQC5jPCTscSYMko30dLJHzNXJaUNtcucWv+SOi3jV3PE" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js" integrity="sha384-r1ru3tcf6FhnCFR4B7pIFG+BhFF9LlFtz/P1y4pblWn3AGs9y3lBx5SKLNf4+rED" crossorigin="anonymous"></script>
-  <script src="js/proteccion.js?v=8.21"></script>
-  <script src="js/app-instalable.js?v=8.21"></script>
-  <script src="js/config.js?v=8.21"></script>
-  <script src="js/municipios.js?v=8.21"></script>
-  <script src="js/ocr.js?v=8.21"></script>
-  <script src="js/lectorpdf.js?v=8.21"></script>
-  <script src="js/capas.js?v=8.21"></script>
-  <script src="js/app.js?v=8.21"></script>
+  <script src="js/proteccion.js?v=8.23"></script>
+  <script src="js/app-instalable.js?v=8.23"></script>
+  <script src="js/config.js?v=8.23"></script>
+  <script src="js/municipios.js?v=8.23"></script>
+  <script src="js/ocr.js?v=8.23"></script>
+  <script src="js/lectorpdf.js?v=8.23"></script>
+  <script src="js/inicio.js?v=8.23"></script>
+  <script src="js/capas.js?v=8.23"></script>
+  <script src="js/app.js?v=8.23"></script>
 </body>
 </html>

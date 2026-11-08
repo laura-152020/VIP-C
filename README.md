@@ -231,3 +231,7 @@ Quién puede: las personas con **Rol = admin** en la hoja `Usuarios` eliminan cu
 registraron. Si ArcGIS responde que no se puede borrar, la capa necesita la operación «Eliminar» activa o las propiedades
 `ARCGIS_USUARIO` y `ARCGIS_CLAVE` de una cuenta con permiso de edición. Para recuperar un punto: en el editor del Apps
 Script, cambia `ID_O_FID` en `restaurarPuntoEliminado` y ejecútala (crea el punto de nuevo con su foto).
+
+## Pantalla de inicio
+
+Al iniciar sesión solo se muestran tres cajas: **1 Carga manual de datos**, **2 Carga fotográfica** y **3 Subir PDF**. Cada botón abre únicamente su sección (`js/inicio.js`, vista `data-vista` en `#app`), con el botón «← Volver al inicio». Los «Registros» y la barra «Guardar datos» siguen visibles dentro de cada sección; los puntos guardados se abren desde el enlace bajo las cajas.

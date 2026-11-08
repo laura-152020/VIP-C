@@ -1191,10 +1191,12 @@
     </article>`;
   }
 
+  // Imagen sacada de un PDF que aún no tiene fecha de sello: no se muestra (puede ser un mapa); aparece cuando se lee la fecha
+  const oculta = (r) => !!r.dePdf && !r.fecha && !(r.editados && r.editados.fecha);
   function render() {
     // Las fotos se muestran dentro de su sección (2); la carga manual y los PDF, en «Registros»
-    const enSeccion = (r) => r.origen === "foto" && !r.enLista && r.estado !== "guardado"; // al agregarla pasa a «Registros»
-    const fotos = items.filter(enSeccion), otros = items.filter((r) => !enSeccion(r));
+    const enSeccion = (r) => r.origen === "foto" && !r.enLista && r.estado !== "guardado" && !oculta(r); // al agregarla pasa a «Registros»
+    const fotos = items.filter(enSeccion), otros = items.filter((r) => !enSeccion(r) && !oculta(r));
     $("#tarjetas-fotos").innerHTML = fotos.map(tarjeta).join("");
     $("#tarjetas").innerHTML = otros.length ? otros.map(tarjeta).join("")
       : '<p class="vacio">' + "Aquí aparecen los registros que vas agregando desde las secciones 1, 2 y 3." + "</p>";
@@ -1202,6 +1204,8 @@
   }
   function actualizar(r) {
     const el = document.querySelector(`.card[data-id="${r.id}"]`);
+    if (oculta(r)) { if (el) el.remove(); contadores(); return; }
+    if (!el && r.dePdf) { render(); return; } // acaba de leerse su fecha: aparece
     if (el) el.outerHTML = tarjeta(r);
     contadores();
   }
@@ -1491,8 +1495,8 @@
   async function recibirPegados(files) {
     const imgs = (await Promise.all(files.filter((f) => /^image\//.test(f.type)).map(aImagenCompatible))).filter(Boolean);
     const pdfs = files.filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || ""));
-    if (imgs.length) { msgF(imgs.length === 1 ? "Imagen pegada. Leyendo el sello…" : imgs.length + " imágenes pegadas. Leyendo los sellos…"); agregarFotos(imgs.map(nombrePegado)); $("#seccion-fotos").scrollIntoView({ behavior: "smooth", block: "start" }); }
-    if (pdfs.length) { cargarPDF(pdfs[0]); $("#pdfs").scrollIntoView({ behavior: "smooth", block: "start" }); }
+    if (imgs.length) { msgF(imgs.length === 1 ? "Imagen pegada. Leyendo el sello…" : imgs.length + " imágenes pegadas. Leyendo los sellos…"); agregarFotos(imgs.map(nombrePegado)); if (window.VistaInicio && $("#app").dataset.vista === "inicio") VistaInicio.ir("fotos"); $("#seccion-fotos").scrollIntoView({ behavior: "smooth", block: "start" }); }
+    if (pdfs.length) { cargarPDF(pdfs[0]); if (window.VistaInicio && $("#app").dataset.vista === "inicio") VistaInicio.ir("pdf"); $("#pdfs").scrollIntoView({ behavior: "smooth", block: "start" }); }
     return imgs.length + pdfs.length;
   }
   // Saca los archivos de lo pegado: archivos, elementos de tipo archivo o imágenes incrustadas (data:)
@@ -1595,7 +1599,7 @@
   }
   function mostrarApp() {
     const d = Sesion.datos();
-    $("#acceso").hidden = true; $("#app").hidden = false; $("#barra").hidden = false;
+    $("#acceso").hidden = true; $("#app").dataset.vista = "inicio"; $("#app").hidden = false; $("#barra").hidden = false;
     $("#usuario").hidden = false; $("#usuario-nombre").textContent = d ? d.nombre : "";
     if (!appIniciada) {
       appIniciada = true;
