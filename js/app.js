@@ -846,7 +846,7 @@
       }
       msgPdf(`${archivos.length} imagen(es) sacadas del PDF. Leyendo los sellos…`);
       const creados = await agregarFotos(archivos, { dePdf: true });
-      const dest = document.querySelector("#seccion-fotos"); if (dest) dest.scrollIntoView({ behavior: "smooth", block: "start" });
+      const dest = document.querySelector("#pdf-revision"); if (dest) dest.scrollIntoView({ behavior: "smooth", block: "start" });
       // Solo cuentan las imágenes con sello (fecha y coordenadas): mapas, capturas y logos se descartan al terminar de leerlas
       const t0 = Date.now(), terminado = (r) => r.estado !== "leyendo" && !r.confirmandoIA && !r.verificando;
       while (creados.some((r) => !terminado(r)) && Date.now() - t0 < 240000) {
@@ -1167,7 +1167,8 @@
   function tarjeta(r) {
     const esFoto = r.origen === "foto", esPdf = r.origen === "pdf", conImagen = !!r.miniatura;
     const bloqueado = r.estado === "guardado" || r.estado === "guardando" || r.estado === "leyendo" || r.estado === "eliminado";
-    const cls = ["card", conImagen ? "" : "is-manual", r.estado === "guardado" ? "is-guardado" : "", r.estadoPunto === "Crítico" ? "is-critico" : ""].join(" ");
+    const resumen = !!r.dePdf && r.enLista && !r.abierta && r.estado !== "leyendo";
+    const cls = ["card", resumen ? "card--resumen" : "", conImagen ? "" : "is-manual", r.estado === "guardado" ? "is-guardado" : "", r.estadoPunto === "Crítico" ? "is-critico" : ""].join(" ");
     const porVerificar = r.enLista && ["listo", "revisar", "error"].includes(r.estado);
     const etiqueta = porVerificar && r.estado !== "error" ? (r.verificado ? "Verificado" : "Por verificar")
       : r.estado === "listo" && !esFoto && !esPdf ? "Carga manual" : (r.estado === "listo" && esPdf ? "Listo · PDF" : ETIQUETAS[r.estado]);
@@ -1179,12 +1180,13 @@
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}"${r.errorIA ? ` title="IA: ${esc(r.errorIA)}"` : ""}>${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
           : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", google: "✓ Leído con el lector de Google", lector: "Leído con el lector del navegador" + (r.errorIA ? " · IA no disponible: " + motivoIA(r.errorIA) : "") }[r.leidoPor] || ""}</div>` : ""}
-        <fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>
+        ${resumen ? `<div class="card__resumen">${[r.fechaTexto || r.fecha, r.latitudDMS && r.longitudDMS ? r.latitudDMS + " · " + r.longitudDMS : "", [r.codigoVia, r.nombreTramo].filter(Boolean).join(" · "), r.municipio, r.tipoAfectacion, r.responsable].filter(Boolean).map(esc).join(" — ")}</div>` : `<fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>`}
         ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">
           ${esFoto && !r.enLista && ["listo", "revisar", "error"].includes(r.estado) ? '<button type="button" class="btn btn--sm btn--primary" data-act="agregar">Agregar a la lista</button>' : ""}
           ${esFoto && r.estado !== "guardado" && r.estado !== "leyendo" && r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="releer">Volver a leer la foto</button>' : ""}
           ${HAY_BACKEND && r.estado === "guardado" && r.idRegistro && !String(r.idRegistro).startsWith("L-") ? '<button type="button" class="btn btn--sm btn--peligro" data-act="eliminar">Eliminar punto</button>' : ""}
+          ${r.dePdf && r.enLista && r.estado !== "guardado" && r.estado !== "guardando" ? `<button type="button" class="btn btn--sm" data-act="abrir">${r.abierta ? "Cerrar" : "Editar"}</button>` : ""}
           ${r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="quitar">Quitar de la lista</button>' : ""}
         </div>
       </div>
@@ -1193,18 +1195,91 @@
 
   // Imagen sacada de un PDF que aún no tiene fecha de sello: no se muestra (puede ser un mapa); aparece cuando se lee la fecha
   const oculta = (r) => !!r.dePdf && !r.fecha && !(r.editados && r.editados.fecha);
+  const enPanelPdf = (r) => !!r.dePdf && !r.enLista && r.estado !== "guardado" && !oculta(r);
   function render() {
-    // Las fotos se muestran dentro de su sección (2); la carga manual y los PDF, en «Registros»
-    const enSeccion = (r) => r.origen === "foto" && !r.enLista && r.estado !== "guardado" && !oculta(r); // al agregarla pasa a «Registros»
-    const fotos = items.filter(enSeccion), otros = items.filter((r) => !enSeccion(r) && !oculta(r));
+    // Las fotos se muestran dentro de su sección (2); las del PDF, en su panel ordenado (3); la carga manual y lo ya agregado, en «Registros»
+    const enSeccion = (r) => r.origen === "foto" && !r.enLista && r.estado !== "guardado" && !r.dePdf;
+    const fotos = items.filter(enSeccion), otros = items.filter((r) => !enSeccion(r) && !oculta(r) && !enPanelPdf(r));
     $("#tarjetas-fotos").innerHTML = fotos.map(tarjeta).join("");
     $("#tarjetas").innerHTML = otros.length ? otros.map(tarjeta).join("")
       : '<p class="vacio">' + "Aquí aparecen los registros que vas agregando desde las secciones 1, 2 y 3." + "</p>";
+    pintarRevisionPdf();
     contadores();
   }
+
+  /* ---- Revisión ordenada de las fotos del PDF ---- */
+  let selFotoPdf = null, selManual = false;
+  const msgPr = (t, e) => { const m = $("#pr-msg"); m.textContent = t || ""; m.style.color = e ? "var(--err)" : ""; };
+  const NOM_FALTA = { fecha: "fecha", municipio: "municipio", tipoAfectacion: "tipo", responsable: "responsable", codigoVia: "vía", nombreTramo: "vía" };
+  function pintarRevisionPdf() {
+    const lista = items.filter(enPanelPdf), caja = $("#pdf-revision");
+    caja.hidden = !lista.length;
+    if (!lista.length) { selFotoPdf = null; selManual = false; return; }
+    if (!selManual) selFotoPdf = lista[0].id; // mientras no elijas una, se muestra la primera
+    if (!lista.some((r) => r.id === selFotoPdf)) {
+      const i = Math.min(Math.max(lista.findIndex((r) => r.id === selFotoPdf), 0), lista.length - 1); selFotoPdf = lista[i].id;
+    }
+    const leyendo = lista.filter((r) => r.estado === "leyendo").length;
+    const completas = lista.filter((r) => r.estado !== "leyendo" && !faltantes(r).length).length;
+    $("#pr-resumen").innerHTML = `<b>${lista.length}</b> foto(s) con sello · <span class="ok">${completas} completas</span> · ${lista.length - completas - leyendo} con datos por completar${leyendo ? " · " + leyendo + " leyendo" : ""}`;
+    $("#pr-tabla").innerHTML = lista.map((r, i) => {
+      const f = r.estado === "leyendo" ? null : faltantes(r);
+      const est = f === null ? '<span class="chip chip--leyendo">Leyendo…</span>' : f.length ? `<span class="pr-falta">Falta: ${[...new Set(f.map((k) => NOM_FALTA[k]))].join(", ")}</span>` : '<span class="chip chip--listo">Completa</span>';
+      return `<button type="button" role="listitem" class="pr-fila${r.id === selFotoPdf ? " is-sel" : ""}" data-pr="${r.id}">
+        <span class="pr-n">${i + 1}</span>${r.miniatura ? `<img src="${r.miniatura}" alt="" loading="lazy">` : "<span></span>"}
+        <span class="pr-fecha">${esc(r.fecha || "—")}</span>
+        <span class="pr-coord">${esc(r.latitudDMS || "")}<br>${esc(r.longitudDMS || "")}</span>
+        <span class="pr-via"><b>${esc(r.codigoVia || "—")}</b><br>${esc(r.nombreTramo || "")}</span>
+        <span class="pr-mun">${esc(r.municipio || "—")}</span>
+        <span class="pr-est">${est}</span></button>`;
+    }).join("");
+    const idx = lista.findIndex((r) => r.id === selFotoPdf);
+    $("#pr-pos").textContent = `Foto ${idx + 1} de ${lista.length}`;
+    $("#pr-ant").disabled = idx <= 0; $("#pr-sig").disabled = idx >= lista.length - 1;
+    const enfocado = document.activeElement && document.activeElement.closest && document.activeElement.closest("#pr-detalle");
+    if (!enfocado) $("#pr-detalle").innerHTML = tarjeta(lista[idx]);
+  }
+  function moverPr(d) {
+    const lista = items.filter(enPanelPdf), i = lista.findIndex((r) => r.id === selFotoPdf) + d;
+    if (i >= 0 && i < lista.length) { selManual = true; selFotoPdf = lista[i].id; $("#pr-detalle").innerHTML = ""; pintarRevisionPdf(); }
+  }
+  $("#pr-resp").innerHTML += RESPONSABLES.map((x) => `<option>${esc(x)}</option>`).join("");
+  $("#pr-tipo").innerHTML += TIPOS_AFECTACION.map((x) => `<option>${esc(x)}</option>`).join("");
+  $("#pr-tabla").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-pr]"); if (!b) return;
+    const f = items.find((r) => String(r.id) === String(b.dataset.pr)); if (!f) return;
+    selManual = true; selFotoPdf = f.id;
+    $("#pr-detalle").innerHTML = ""; pintarRevisionPdf();
+    $("#pr-detalle").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  $("#pr-ant").addEventListener("click", () => moverPr(-1));
+  $("#pr-sig").addEventListener("click", () => moverPr(1));
+  $("#pr-aplicar").addEventListener("click", () => {
+    const resp = $("#pr-resp").value, tipo = $("#pr-tipo").value; let n = 0;
+    if (!resp && !tipo) { msgPr("Elige un responsable y/o un tipo de afectación para aplicar.", true); return; }
+    items.filter(enPanelPdf).forEach((r) => {
+      r.editados = r.editados || {};
+      if (resp && !r.responsable) { r.responsable = resp; r.editados.responsable = true; n++; }
+      if (tipo && !r.tipoAfectacion) { r.tipoAfectacion = tipo; r.editados.tipoAfectacion = true; n++; }
+    });
+    $("#pr-detalle").innerHTML = ""; pintarRevisionPdf();
+    msgPr(n ? `Se completaron ${n} dato(s) vacíos.` : "No había datos vacíos para completar.");
+  });
+  $("#pr-todas").addEventListener("click", () => {
+    const lista = items.filter((r) => enPanelPdf(r) && r.estado !== "leyendo");
+    const ok = lista.filter((r) => !faltantes(r).length);
+    ok.forEach((r) => { r.enLista = true; r.verificado = false; });
+    $("#pr-detalle").innerHTML = ""; render();
+    msgPr(ok.length ? `${ok.length} foto(s) agregadas a «Registros». ${lista.length - ok.length ? (lista.length - ok.length) + " siguen aquí porque les faltan datos. " : ""}Revísalas, marca «Verifiqué la información» y toca «Guardar datos».` : "Ninguna está completa todavía: usa «Aplicar a todas las que estén vacías» o completa cada ficha.", !ok.length);
+  });
+  $("#verificar-todas").addEventListener("click", () => {
+    pendientes().filter((r) => !r.verificado && !faltantes(r).length && r.estado !== "error").forEach((r) => { r.verificado = true; });
+    render();
+  });
   function actualizar(r) {
     const el = document.querySelector(`.card[data-id="${r.id}"]`);
     if (oculta(r)) { if (el) el.remove(); contadores(); return; }
+    if (r.dePdf && !r.enLista) { pintarRevisionPdf(); if (el && r.id === selFotoPdf && !(document.activeElement && el.contains(document.activeElement))) el.outerHTML = tarjeta(r); contadores(); return; }
     if (!el && r.dePdf) { render(); return; } // acaba de leerse su fecha: aparece
     if (el) el.outerHTML = tarjeta(r);
     contadores();
@@ -1218,6 +1293,7 @@
     $("#n-leyendo").textContent = leyendo ? "· " + leyendo + " leyendo" : "";
     $("#resumen").textContent = items.length ? `${items.length} en la lista${HAY_BACKEND ? " · " + guardados + " guardados" : ""}` : "";
     const verificados = pendientes().filter((r) => r.verificado).length;
+    $("#verificar-todas").hidden = pendientes().filter((r) => !r.verificado).length < 2;
     $("#guardar").disabled = !p || guardando;
     // El botón dice cuántos registros verificados se van a guardar (Drive, Sheet y ArcGIS)
     $("#guardar").textContent = guardando ? "Guardando…" : (!p && guardados ? "✓ Todo guardado" : (!p ? "Guardar datos" : (verificados ? `Guardar ${verificados} verificado${verificados > 1 ? "s" : ""}` : "Verifica para guardar")));
@@ -1226,7 +1302,7 @@
   }
 
   const buscar = (el) => items.find((x) => x.id == el.closest(".card")?.dataset.id);
-  ["#tarjetas", "#tarjetas-fotos"].forEach((sel) => {
+  ["#tarjetas", "#tarjetas-fotos", "#pr-detalle"].forEach((sel) => {
   $(sel).addEventListener("input", (e) => {
     const r = buscar(e.target); if (!r) return;
     const card = e.target.closest(".card");
@@ -1244,12 +1320,13 @@
     if (b.dataset.act === "quitar") { if (r.urlOriginal) URL.revokeObjectURL(r.urlOriginal); items = items.filter((x) => x !== r); render(); if (!HAY_BACKEND) { try { escribirLocal(); } catch (_) {} } }
     if (b.dataset.act === "agregar") {
       const f = faltantes(r), card = b.closest(".card");
-      const fm = $("#f-msg"), msgF = (t, e) => { fm.textContent = t; fm.style.color = e ? "var(--err)" : ""; };
+      const fm = b.closest("#pr-detalle") ? $("#pr-msg") : $("#f-msg"), msgF = (t, e) => { fm.textContent = t; fm.style.color = e ? "var(--err)" : ""; };
       if (f.length) { marcar(card, f); msgF("Falta: " + textoFaltantes(f) + ".", true); return; }
       r.enLista = true; r.verificado = false; render();
       msgF(r.nombreArchivo + " agregada a «Registros»: revísalo, marca «Verifiqué la información» y toca «Guardar datos».");
       return;
     }
+    if (b.dataset.act === "abrir") { r.abierta = !r.abierta; actualizar(r); return; }
     if (b.dataset.act === "eliminar") { pedirEliminar({ id: r.idRegistro, fid: r.idArcgis || "", municipio: r.municipio, tramo: r.nombreTramo || r.codigoVia }); return; }
     if (b.dataset.act === "releer") { r.releerPreciso = true; cola.push(r); r.estado = "leyendo"; actualizar(r); procesarCola(); }
     if (b.dataset.act === "ver") abrirVisor(r.dataUrl || r.miniatura, r.nombreArchivo + (r.punto ? " · " + r.punto + (r.pagina ? " (página " + r.pagina + ")" : "") : ""));

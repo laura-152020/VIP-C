@@ -235,3 +235,7 @@ Script, cambia `ID_O_FID` en `restaurarPuntoEliminado` y ejecútala (crea el pun
 ## Pantalla de inicio
 
 Al iniciar sesión solo se muestran tres cajas: **1 Carga manual de datos**, **2 Carga fotográfica** y **3 Subir PDF**. Cada botón abre únicamente su sección (`js/inicio.js`, vista `data-vista` en `#app`), con el botón «← Volver al inicio». Los «Registros» y la barra «Guardar datos» siguen visibles dentro de cada sección; los puntos guardados se abren desde el enlace bajo las cajas.
+
+## Sección 3 · revisión ordenada de las fotos del PDF
+
+Las fotos con sello sacadas del PDF no se listan como tarjetas grandes: aparecen en un panel con (1) un resumen («N con sello · M completas»), (2) una tabla compacta (miniatura, fecha, coordenadas, vía, municipio y qué falta), (3) una sola ficha a la vez con «Anterior / Siguiente», (4) «Aplicar a todas las que estén vacías» (responsable y tipo de afectación) y (5) «Agregar todas las completas a Registros». Ya en «Registros», las fotos del PDF se ven en una línea resumida con botón «Editar», y «Marcar todas como verificadas» acelera la revisión.

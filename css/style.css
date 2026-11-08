@@ -260,12 +260,29 @@ img{-webkit-user-drag:none}
 #app:not([data-vista="inicio"]) .volver{display:block}
 #app[data-vista="manual"] > .panel:not(#manual),
 #app[data-vista="fotos"] > .panel:not(#seccion-fotos),
-#app[data-vista="pdf"] > .panel:not(#pdfs):not(#seccion-fotos),
+#app[data-vista="pdf"] > .panel:not(#pdfs),
 #app[data-vista="guardados"] > .panel:not(#guardados){display:none}
-#app[data-vista="pdf"] #seccion-fotos .panel__head,
-#app[data-vista="pdf"] #seccion-fotos .drop,
-#app[data-vista="pdf"] #seccion-fotos .pegar,
-#app[data-vista="pdf"] #seccion-fotos #f-msg{display:none}
-#app[data-vista="pdf"] #seccion-fotos{background:none;border:0;padding:0}
 #app[data-vista="guardados"] > .lista{display:none}
 @media (max-width:760px){.cajas{grid-template-columns:1fr}}
+
+/* ---------- Revisión ordenada del PDF ---------- */
+.pr{display:grid;gap:12px}
+.pr__resumen{font-size:15px}.pr__resumen .ok{color:var(--ok);font-weight:600}
+.pr__masivo{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;border:1px dashed var(--line);border-radius:8px}
+.pr__masivo select{width:auto;min-width:170px}
+.pr__tabla{display:grid;border:1px solid var(--line);border-radius:8px;overflow:auto;max-height:340px;background:var(--surface)}
+.pr-fila{display:grid;grid-template-columns:28px 64px 92px 1.2fr 1.3fr 1fr 130px;gap:10px;align-items:center;padding:6px 10px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);text-align:left;font:inherit;font-size:13px;cursor:pointer;min-width:720px}
+.pr-fila:last-child{border-bottom:0}
+.pr-fila:hover{background:var(--field)}
+.pr-fila.is-sel{background:var(--sign-soft);box-shadow:inset 3px 0 0 var(--brand)}
+.pr-fila img{width:64px;height:44px;object-fit:cover;border-radius:4px;display:block}
+.pr-n{font-weight:700;color:var(--muted)}
+.pr-coord,.pr-fecha{font-family:var(--f-mono,monospace);font-size:12px}
+.pr-via b{font-weight:700}
+.pr-falta{color:var(--err);font-size:12px;font-weight:600}
+.pr__nav{display:flex;align-items:center;justify-content:center;gap:14px}
+.card--resumen{grid-template-columns:96px 1fr}
+.card--resumen .card__foto{position:static}
+.card--resumen .card__cuerpo{padding:10px;gap:6px}
+.card__resumen{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+@media (max-width:760px){.pr__masivo select{flex:1 1 100%}}
