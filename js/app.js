@@ -131,7 +131,17 @@
         r.tramoDe = "redvial"; r.viaAuto = true;
       } else if (!String(r.codigoVia).trim() && v.codigo) { r.codigoVia = v.codigo; cambio = true; }
       r.viaInfo = `vía ${v.orden.toLowerCase()} a ${Math.round(v.distancia)} m`;
-    } else if (!r.viaInfo) { r.viaInfo = "no hay una vía de la red vial a menos de 300 m de este punto"; cambio = true; }
+    } else {
+      const propio = editado(r, "nombreTramo") || editado(r, "codigoVia") || r.tramoDe === "lista";
+      if (!propio && r.latitud === lat && r.longitud === lon) {
+        // Sin vía junto al punto: se busca en la red vial el nombre más parecido al del sello; si no hay, queda vacío
+        const raw = r.tramoSello || (r.tramoDe === "gem" || r.tramoDe === "ocr" ? r.nombreTramo : "");
+        let alt = null;
+        try { alt = raw ? await Capas.nombreParecido(raw, 0.72) : null; } catch (_) { alt = undefined; }
+        if (alt) { r.nombreTramo = alt.nombre; r.codigoVia = alt.codigo; r.tramoDe = "redvial"; r.viaAuto = true; r.viaInfo = "no hay vía a menos de 300 m; nombre más parecido al del sello"; cambio = true; }
+        else if (alt === null) { if (r.nombreTramo || r.codigoVia) { r.nombreTramo = ""; r.codigoVia = ""; r.tramoDe = ""; r.viaAuto = false; } r.viaInfo = "no hay una vía de la red vial (Circular 10) a menos de 300 m de este punto: elígela de la lista"; cambio = true; }
+      }
+    }
     if (cambio || v) repintarSinPerderFoco(r, repintar);
   }
   // Relación código ↔ nombre de la red vial: al escribir uno, se completa el otro
@@ -539,7 +549,8 @@
     let cambio = false, coords = false;
     if (x.fecha && !editado(r, "fecha") && x.fecha !== r.fecha) { r.fecha = x.fecha; r.fechaTexto = x.fechaTexto || ""; cambio = true; }
     if (x.latitud != null && x.longitud != null && !editado(r, "coord") && (!tieneCoord(r) || metros(x, r) > 5)) { ponerCoords(r, x, "gem"); cambio = coords = true; }
-    if (x.tramo && !editado(r, "nombreTramo") && r.tramoDe !== "lista" && x.tramo !== r.nombreTramo) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; r.viaAuto = false; cambio = true; }
+    if (x.tramo) r.tramoSello = x.tramo; // lo escrito en el sello solo orienta: el tramo definitivo sale de la red vial
+    if (x.tramo && !editado(r, "nombreTramo") && r.tramoDe !== "lista" && x.tramo !== r.nombreTramo && !tieneCoord(r)) { r.nombreTramo = x.tramo; r.tramoDe = "gem"; r.viaAuto = false; cambio = true; }
     if (x.codigoVia && !editado(r, "codigoVia") && r.tramoDe !== "lista" && x.codigoVia !== r.codigoVia) { r.codigoVia = x.codigoVia; cambio = true; }
     if (x.tipoAfectacion && !editado(r, "tipoAfectacion") && TIPOS_AFECTACION.includes(x.tipoAfectacion) && x.tipoAfectacion !== r.tipoAfectacion) { r.tipoAfectacion = x.tipoAfectacion; cambio = true; }
     if (x.municipioTexto) r.municipioTexto = x.municipioTexto;
@@ -616,7 +627,8 @@
       r.origenUbicacion = "gps";
     }
     if (!r.fecha && r.exif && r.exif.fecha) r.fecha = r.exif.fecha;
-    if (d.tramo && (!r.nombreTramo || r.tramoDe === "ocr" || r.tramoDe === "gem")) { r.nombreTramo = d.tramo; r.tramoDe = gem && gem.tramo === d.tramo ? "gem" : "ocr"; }
+    if (d.tramo) r.tramoSello = d.tramo;
+    if (d.tramo && !tieneCoord(r) && (!r.nombreTramo || r.tramoDe === "ocr" || r.tramoDe === "gem")) { r.nombreTramo = d.tramo; r.tramoDe = gem && gem.tramo === d.tramo ? "gem" : "ocr"; }
     if (d.codigoVia && !r.codigoVia) r.codigoVia = d.codigoVia;
     if (d.tipoAfectacion && !r.tipoAfectacion && TIPOS_AFECTACION.includes(d.tipoAfectacion)) r.tipoAfectacion = d.tipoAfectacion;
     r.coordDudosa = !!d.coordDudosa && !deGem;
@@ -635,10 +647,11 @@
     actualizar(r);
     enriquecer(r, () => actualizar(r));
     // Tramo leído solo por el lector del navegador: se corrige con el nombre más parecido de la red vial (Circular 10)
-    const corregirConRed = () => { if (r.tramoDe === "ocr" && typeof Capas !== "undefined") Capas.nombreParecido(r.nombreTramo, 0.7).then((v) => {
-      if (!v || r.tramoDe !== "ocr" || r.estado === "guardado" || r.estado === "guardando") return;
-      r.nombreTramo = v.nombre; r.tramoDe = "redvial";
-      if (!r.codigoVia) r.codigoVia = v.codigo;
+    // Sin coordenadas: el nombre del sello se cambia por el más parecido de la red vial; si no hay ninguno, queda vacío (no se deja texto que no sea de la red vial)
+    const corregirConRed = () => { if ((r.tramoDe === "ocr" || r.tramoDe === "gem") && typeof Capas !== "undefined") Capas.nombreParecido(r.nombreTramo, 0.72).then((v) => {
+      if (r.estado === "guardado" || r.estado === "guardando" || (r.tramoDe !== "ocr" && r.tramoDe !== "gem") || editado(r, "nombreTramo")) return;
+      if (v) { r.nombreTramo = v.nombre; r.tramoDe = "redvial"; if (!r.codigoVia) r.codigoVia = v.codigo; r.viaInfo = "nombre de la red vial más parecido al del sello"; }
+      else { r.nombreTramo = ""; r.tramoDe = ""; r.viaInfo = "el tramo del sello no está en la red vial: elígelo de la lista"; }
       repintarSinPerderFoco(r, () => actualizar(r));
     }).catch(() => {}); };
     if (!falta) { corregirConRed(); verificarIA(r, gem, ocr); return; }
@@ -654,7 +667,8 @@
       // Llegó el lector después de la IA: solo completa lo que falte
       ocr = x; r.iaSinSello = !!gem && !gem.fecha && gem.latitud == null;
       if (x && x.codigoVia && !r.codigoVia) r.codigoVia = x.codigoVia;
-      if (x && x.tramo && !r.nombreTramo) { r.nombreTramo = x.tramo; r.tramoDe = "ocr"; corregirConRed(); }
+      if (x && x.tramo) r.tramoSello = r.tramoSello || x.tramo;
+      if (x && x.tramo && !r.nombreTramo && !tieneCoord(r)) { r.nombreTramo = x.tramo; r.tramoDe = "ocr"; corregirConRed(); }
     }
     evaluar(r, x || gem ? "" : error);
     repintarSinPerderFoco(r, () => actualizar(r));
