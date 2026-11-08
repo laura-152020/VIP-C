@@ -286,3 +286,12 @@ img{-webkit-user-drag:none}
 .card--resumen .card__cuerpo{padding:10px;gap:6px}
 .card__resumen{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 @media (max-width:760px){.pr__masivo select{flex:1 1 100%}}
+
+/* ---------- Verificar y enviar ---------- */
+#app[data-vista="verificar"] > .panel:not(#verificacion),
+#app[data-vista="verificar"] > .lista{display:none}
+.pr-fila.vf{grid-template-columns:28px 64px 92px 1.2fr 1.3fr 1fr 1fr 130px;min-width:860px}
+.pr-fila.vf .pr-mun b{font-size:12px}
+.vf-confirmo{font-size:16px;font-weight:600;padding:12px}
+.reg-sig{justify-content:flex-end}
+.reg-sig .btn{padding:12px 20px;font-size:16px}

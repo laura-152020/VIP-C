@@ -239,3 +239,7 @@ Al iniciar sesión solo se muestran tres cajas: **1 Carga manual de datos**, **2
 ## Sección 3 · revisión ordenada de las fotos del PDF
 
 Las fotos con sello sacadas del PDF no se listan como tarjetas grandes: aparecen en un panel con (1) un resumen («N con sello · M completas»), (2) una tabla compacta (miniatura, fecha, coordenadas, vía, municipio y qué falta), (3) una sola ficha a la vez con «Anterior / Siguiente», (4) «Aplicar a todas las que estén vacías» (responsable y tipo de afectación) y (5) «Agregar todas las completas a Registros». Ya en «Registros», las fotos del PDF se ven en una línea resumida con botón «Editar», y «Marcar todas como verificadas» acelera la revisión.
+
+## Verificar y enviar
+
+Las tarjetas ya no tienen la casilla «Verifiqué la información». Al final de «Registros» hay un botón **Siguiente → Verificar y enviar**, que abre una sección con todos los registros pendientes en una tabla (fecha, coordenadas, vía, municipio, tipo, responsable y qué falta). Tocar una fila abre su ficha para corregirla. Una sola casilla («Verifiqué la información de todos los registros») habilita el botón **Enviar N registros**, que guarda en Drive, Sheets y ArcGIS.

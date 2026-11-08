@@ -1164,29 +1164,28 @@
   /* ======================= Tarjetas ======================= */
   const ETIQUETAS = { leyendo: "Leyendo…", listo: "Listo", revisar: "Revisar", guardando: "Guardando…", guardado: "Guardado", error: "Error al guardar", manual: "Carga manual", eliminado: "Eliminado" };
 
-  function tarjeta(r) {
+  function tarjeta(r, forzada) {
     const esFoto = r.origen === "foto", esPdf = r.origen === "pdf", conImagen = !!r.miniatura;
     const bloqueado = r.estado === "guardado" || r.estado === "guardando" || r.estado === "leyendo" || r.estado === "eliminado";
-    const resumen = !!r.dePdf && r.enLista && !r.abierta && r.estado !== "leyendo";
+    const resumen = !forzada && !!r.dePdf && r.enLista && !r.abierta && r.estado !== "leyendo";
     const cls = ["card", resumen ? "card--resumen" : "", conImagen ? "" : "is-manual", r.estado === "guardado" ? "is-guardado" : "", r.estadoPunto === "Crítico" ? "is-critico" : ""].join(" ");
     const porVerificar = r.enLista && ["listo", "revisar", "error"].includes(r.estado);
-    const etiqueta = porVerificar && r.estado !== "error" ? (r.verificado ? "Verificado" : "Por verificar")
+    const etiqueta = porVerificar && r.estado !== "error" ? "En la lista"
       : r.estado === "listo" && !esFoto && !esPdf ? "Carga manual" : (r.estado === "listo" && esPdf ? "Listo · PDF" : ETIQUETAS[r.estado]);
     const nombre = esFoto ? r.nombreArchivo : esPdf ? r.nombreArchivo + (r.punto ? " · " + r.punto : "") : "Registro sin foto";
     return `<article class="${cls}" data-id="${r.id}">
       ${conImagen ? `<button type="button" class="card__foto" data-act="ver" aria-label="${esPdf ? "Ver página del PDF" : "Ver foto completa"}"><img src="${r.miniatura}" alt="${esPdf ? "Página" : "Foto"} ${esc(r.nombreArchivo)}"><span>Ampliar</span></button>` : ""}
       <div class="card__cuerpo">
-        <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? (r.verificado ? "listo" : "revisar") : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
+        <div class="card__top"><span class="card__nombre">${esc(nombre)}${r.idRegistro ? " · " + esc(r.idRegistro) : ""}${r.idArcgis ? " · ArcGIS " + esc(r.idArcgis) : ""}</span><span class="chip chip--${porVerificar && r.estado !== "error" ? "manual" : (r.estado === "listo" && !esFoto && !esPdf ? "manual" : r.estado)}">${etiqueta}</span></div>
         ${r.mensaje ? `<div class="alerta">${esc(r.mensaje)}</div>` : ""}
         ${esFoto && (r.confirmandoIA || r.leidoPor) && r.estado !== "leyendo" ? `<div class="lectura${r.confirmandoIA ? " is-ia" : ""}"${r.errorIA ? ` title="IA: ${esc(r.errorIA)}"` : ""}>${r.confirmandoIA ? '<span class="girando" aria-hidden="true"></span>Confirmando la lectura con IA…'
           : { ia: "✓ Leído con IA", "ia-preciso": "✓ Revisado con IA (lectura precisa)", google: "✓ Leído con el lector de Google", lector: "Leído con el lector del navegador" + (r.errorIA ? " · IA no disponible: " + motivoIA(r.errorIA) : "") }[r.leidoPor] || ""}</div>` : ""}
         ${resumen ? `<div class="card__resumen">${[r.fechaTexto || r.fecha, r.latitudDMS && r.longitudDMS ? r.latitudDMS + " · " + r.longitudDMS : "", [r.codigoVia, r.nombreTramo].filter(Boolean).join(" · "), r.municipio, r.tipoAfectacion, r.responsable].filter(Boolean).map(esc).join(" — ")}</div>` : `<fieldset style="border:0;padding:0;margin:0;display:grid;gap:12px;min-width:0"${bloqueado ? " disabled" : ""}>${campos(r, "c" + r.id + "-")}</fieldset>`}
-        ${porVerificar ? `<label class="verificar"><input type="checkbox" data-act="verificar"${r.verificado ? " checked" : ""}> Verifiqué la información</label>` : ""}
         <div class="actions">
           ${esFoto && !r.enLista && ["listo", "revisar", "error"].includes(r.estado) ? '<button type="button" class="btn btn--sm btn--primary" data-act="agregar">Agregar a la lista</button>' : ""}
           ${esFoto && r.estado !== "guardado" && r.estado !== "leyendo" && r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="releer">Volver a leer la foto</button>' : ""}
           ${HAY_BACKEND && r.estado === "guardado" && r.idRegistro && !String(r.idRegistro).startsWith("L-") ? '<button type="button" class="btn btn--sm btn--peligro" data-act="eliminar">Eliminar punto</button>' : ""}
-          ${r.dePdf && r.enLista && r.estado !== "guardado" && r.estado !== "guardando" ? `<button type="button" class="btn btn--sm" data-act="abrir">${r.abierta ? "Cerrar" : "Editar"}</button>` : ""}
+          ${!forzada && r.dePdf && r.enLista && r.estado !== "guardado" && r.estado !== "guardando" ? `<button type="button" class="btn btn--sm" data-act="abrir">${r.abierta ? "Cerrar" : "Editar"}</button>` : ""}
           ${r.estado !== "guardando" ? '<button type="button" class="btn btn--sm" data-act="quitar">Quitar de la lista</button>' : ""}
         </div>
       </div>
@@ -1203,7 +1202,7 @@
     $("#tarjetas-fotos").innerHTML = fotos.map(tarjeta).join("");
     $("#tarjetas").innerHTML = otros.length ? otros.map(tarjeta).join("")
       : '<p class="vacio">' + "Aquí aparecen los registros que vas agregando desde las secciones 1, 2 y 3." + "</p>";
-    pintarRevisionPdf();
+    pintarRevisionPdf(); pintarVerificar();
     contadores();
   }
 
@@ -1272,16 +1271,67 @@
     $("#pr-detalle").innerHTML = ""; render();
     msgPr(ok.length ? `${ok.length} foto(s) agregadas a «Registros». ${lista.length - ok.length ? (lista.length - ok.length) + " siguen aquí porque les faltan datos. " : ""}Revísalas, marca «Verifiqué la información» y toca «Guardar datos».` : "Ninguna está completa todavía: usa «Aplicar a todas las que estén vacías» o completa cada ficha.", !ok.length);
   });
-  $("#verificar-todas").addEventListener("click", () => {
-    pendientes().filter((r) => !r.verificado && !faltantes(r).length && r.estado !== "error").forEach((r) => { r.verificado = true; });
-    render();
+
+  /* ---- Verificar y enviar: todos los registros pendientes juntos ---- */
+  let selVf = null;
+  const msgVf = (t, e) => { const m = $("#vf-msg"); m.textContent = t || ""; m.style.color = e ? "var(--err)" : ""; };
+  let vistaAntes = "fotos";
+  function pintarVerificar() {
+    const lista = pendientes(), tabla = $("#vf-tabla");
+    const completos = lista.filter((r) => !faltantes(r).length).length;
+    $("#vf-resumen").textContent = lista.length ? `${lista.length} registro(s) · ${completos} completos${lista.length - completos ? " · " + (lista.length - completos) + " con datos por completar" : ""}` : "";
+    tabla.hidden = !lista.length; $("#vf-ayuda").hidden = !lista.length; $("#vf-detalle").hidden = !lista.length;
+    $("#vf-confirmo").parentElement.hidden = !lista.length;
+    if (!lista.length) { selVf = null; tabla.innerHTML = ""; $("#vf-detalle").innerHTML = ""; $("#vf-enviar").disabled = true; $("#vf-enviar").textContent = "Enviar registros"; return; }
+    if (selVf && !lista.some((r) => r.id === selVf)) selVf = null;
+    tabla.innerHTML = lista.map((r, i) => {
+      const f = faltantes(r), mal = (t) => t ? esc(t) : '<b class="pr-falta">falta</b>';
+      const est = r.estado === "error" ? '<span class="pr-falta">Error: reintenta</span>' : f.length ? `<span class="pr-falta">Falta: ${[...new Set(f.map((k) => NOM_FALTA[k]))].join(", ")}</span>` : '<span class="chip chip--listo">Completo</span>';
+      return `<button type="button" role="listitem" class="pr-fila vf${r.id === selVf ? " is-sel" : ""}" data-vf="${r.id}">
+        <span class="pr-n">${i + 1}</span>${r.miniatura ? `<img src="${r.miniatura}" alt="" loading="lazy">` : "<span></span>"}
+        <span class="pr-fecha">${esc(r.fecha || "—")}</span>
+        <span class="pr-coord">${esc(r.latitudDMS || "")}<br>${esc(r.longitudDMS || "")}</span>
+        <span class="pr-via"><b>${esc(r.codigoVia || "—")}</b><br>${esc(r.nombreTramo || "")}</span>
+        <span class="pr-mun">${mal(r.municipio)}<br>${esc(r.tipoAfectacion || "")}</span>
+        <span class="pr-mun">${mal(r.responsable)}</span>
+        <span class="pr-est">${est}</span></button>`;
+    }).join("");
+    const sel = lista.find((r) => r.id === selVf);
+    const enfocado = document.activeElement && document.activeElement.closest && document.activeElement.closest("#vf-detalle");
+    if (!enfocado) $("#vf-detalle").innerHTML = sel ? tarjeta(sel, true) : "";
+    $("#vf-enviar").disabled = guardando || !$("#vf-confirmo").checked;
+    $("#vf-enviar").textContent = guardando ? "Enviando…" : `Enviar ${lista.length} registro${lista.length > 1 ? "s" : ""}`;
+  }
+  document.addEventListener("vista", () => { contadores(); pintarVerificar(); });
+  $("#vf-tabla").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-vf]"); if (!b) return;
+    const r = items.find((x) => String(x.id) === String(b.dataset.vf)); if (!r) return;
+    selVf = selVf === r.id ? null : r.id; $("#vf-detalle").innerHTML = ""; pintarVerificar();
+    if (selVf) $("#vf-detalle").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  $("#vf-confirmo").addEventListener("change", () => { $("#vf-enviar").disabled = guardando || !$("#vf-confirmo").checked; });
+  $("#ir-verificar").addEventListener("click", () => { vistaAntes = $("#app").dataset.vista || "fotos"; $("#vf-confirmo").checked = false; msgVf(""); aviso(""); selVf = null; window.VistaInicio.ir("verificar"); pintarVerificar(); });
+  $("#vf-volver").addEventListener("click", () => window.VistaInicio.ir(vistaAntes === "verificar" ? "inicio" : vistaAntes));
+  $("#vf-enviar").addEventListener("click", async () => {
+    const lista = pendientes();
+    if (!lista.length) return;
+    if (!$("#vf-confirmo").checked) { msgVf("Marca «Verifiqué la información» para enviar.", true); return; }
+    const malos = validarTodos(lista);
+    if (malos) { msgVf(`${malos} registro(s) con datos obligatorios vacíos. Toca la fila marcada, complétalos y vuelve a enviar.`, true); selVf = (lista.find((r) => faltantes(r).length) || {}).id || null; $("#vf-detalle").innerHTML = ""; pintarVerificar(); return; }
+    lista.forEach((r) => { r.verificado = true; });
+    msgVf("Enviando…");
+    const r = await guardarLista(lista);
+    msgVf(r.texto, r.error); aviso(r.texto, r.error);
+    $("#vf-confirmo").checked = false; pintarVerificar();
   });
   function actualizar(r) {
-    const el = document.querySelector(`.card[data-id="${r.id}"]`);
-    if (oculta(r)) { if (el) el.remove(); contadores(); return; }
+    const els = [...document.querySelectorAll(`.card[data-id="${r.id}"]`)];
+    const el = els[0];
+    if (oculta(r)) { els.forEach((x) => x.remove()); contadores(); return; }
     if (r.dePdf && !r.enLista) { pintarRevisionPdf(); if (el && r.id === selFotoPdf && !(document.activeElement && el.contains(document.activeElement))) el.outerHTML = tarjeta(r); contadores(); return; }
-    if (!el && r.dePdf) { render(); return; } // acaba de leerse su fecha: aparece
-    if (el) el.outerHTML = tarjeta(r);
+    if (!els.length && r.dePdf) { render(); return; } // acaba de leerse su fecha: aparece
+    els.forEach((x) => { if (!(document.activeElement && x.contains(document.activeElement)) || x.closest("#tarjetas")) x.outerHTML = tarjeta(r, !!x.closest("#vf-detalle")); });
+    if (r.enLista) pintarVerificar();
     contadores();
   }
   // Pendientes = registros agregados a «Registros» que aún no se han guardado
@@ -1292,17 +1342,17 @@
     $("#n-listas").textContent = p;
     $("#n-leyendo").textContent = leyendo ? "· " + leyendo + " leyendo" : "";
     $("#resumen").textContent = items.length ? `${items.length} en la lista${HAY_BACKEND ? " · " + guardados + " guardados" : ""}` : "";
-    const verificados = pendientes().filter((r) => r.verificado).length;
-    $("#verificar-todas").hidden = pendientes().filter((r) => !r.verificado).length < 2;
-    $("#guardar").disabled = !p || guardando;
-    // El botón dice cuántos registros verificados se van a guardar (Drive, Sheet y ArcGIS)
-    $("#guardar").textContent = guardando ? "Guardando…" : (!p && guardados ? "✓ Todo guardado" : (!p ? "Guardar datos" : (verificados ? `Guardar ${verificados} verificado${verificados > 1 ? "s" : ""}` : "Verifica para guardar")));
-    $("#guardar").title = !p ? (guardados ? "Todos los registros ya están guardados en Drive, Sheets y ArcGIS." : "Agrega un registro desde las secciones 1, 2 o 3.") : "Guarda en Drive, Sheet y ArcGIS los registros marcados como verificados.";
-    $("#n-texto").textContent = (p === 1 ? "pendiente" : "pendientes") + (p ? ` · ${verificados} verificado${verificados === 1 ? "" : "s"}` : "");
+    const enVf = $("#app").dataset.vista === "verificar";
+    $("#reg-sig").hidden = !p || enVf;
+    $("#ir-verificar").textContent = `Siguiente → Verificar y enviar (${p})`;
+    $("#guardar").disabled = guardando || (!p && !guardados) || (!p && enVf);
+    $("#guardar").textContent = guardando ? "Enviando…" : (!p ? (guardados ? "✓ Todo guardado" : "Siguiente →") : (enVf ? `Enviar ${p}` : "Siguiente →"));
+    $("#guardar").title = !p ? (guardados ? "Todos los registros ya están guardados en Drive, Sheets y ArcGIS." : "Agrega un registro desde las secciones 1, 2 o 3.") : "Pasa a «Verificar y enviar», donde se revisan todos los registros juntos.";
+    $("#n-texto").textContent = p === 1 ? "pendiente" : "pendientes";
   }
 
   const buscar = (el) => items.find((x) => x.id == el.closest(".card")?.dataset.id);
-  ["#tarjetas", "#tarjetas-fotos", "#pr-detalle"].forEach((sel) => {
+  ["#tarjetas", "#tarjetas-fotos", "#pr-detalle", "#vf-detalle"].forEach((sel) => {
   $(sel).addEventListener("input", (e) => {
     const r = buscar(e.target); if (!r) return;
     const card = e.target.closest(".card");
@@ -1485,13 +1535,9 @@
     return tarea;
   }
 
-  $("#guardar").addEventListener("click", async () => {
-    const lista = pendientes().filter((r) => r.verificado);
-    if (!lista.length) { aviso("Marca «Verifiqué la información» en los registros que ya revisaste para poder guardarlos.", true); $("#h-registros").scrollIntoView({ behavior: "smooth", block: "start" }); return; }
-    const malos = validarTodos(lista);
-    if (malos) { aviso(`${malos} registro(s) con datos obligatorios vacíos (marcados en rojo). Complétalos para guardar.`, true); return; }
-    const r = await guardarLista(lista);
-    aviso(r.texto, r.error);
+  $("#guardar").addEventListener("click", () => {
+    if ($("#app").dataset.vista === "verificar") { $("#vf-enviar").click(); return; }
+    if (pendientes().length) $("#ir-verificar").click();
   });
 
   /* Sin servidor: los registros se guardan en este navegador y se recuperan al volver a abrir la página */

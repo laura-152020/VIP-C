@@ -6,6 +6,7 @@
     const a = app(); if (!a) return;
     a.dataset.vista = v || "inicio";
     window.scrollTo({ top: 0, behavior: "auto" });
+    document.dispatchEvent(new CustomEvent("vista", { detail: a.dataset.vista }));
     if (v === "manual") { const e = document.querySelector("#manual input,#manual select"); if (e && matchMedia("(min-width:700px)").matches) e.focus({ preventScroll: true }); }
   }
   window.VistaInicio = { ir };

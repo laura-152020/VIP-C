@@ -8,7 +8,7 @@
   <!-- Seguridad: solo se cargan scripts y conexiones de estos orígenes -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' blob:; worker-src 'self' blob: https://cdn.jsdelivr.net; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://services5.arcgis.com https://cdn.jsdelivr.net data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; form-action 'self'; manifest-src 'self'">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=8.24">
+  <link rel="icon" href="img/logo-gobernacion-antioquia.png?v=8.25">
   <link rel="manifest" href="manifest.webmanifest">
   <meta name="theme-color" content="#283517">
   <link rel="apple-touch-icon" href="img/app/apple-touch-icon.png">
@@ -16,12 +16,12 @@
   <meta name="apple-mobile-web-app-title" content="VIP-C">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-  <link rel="stylesheet" href="css/style.css?v=8.24">
+  <link rel="stylesheet" href="css/style.css?v=8.25">
 </head>
 <body>
   <header class="topbar">
     <div class="topbar__in">
-      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=8.24" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
+      <img class="logo" src="img/logo-gobernacion-antioquia-blanco.png?v=8.25" alt="Gobernación de Antioquia · República de Colombia" width="560" height="253">
       <div class="marca">
         <div class="marca__sigla">VIP-C</div>
         <div class="marca__nombre">Visor interactivo de puntos críticos</div>
@@ -227,9 +227,28 @@
       <div class="panel__head">
         <h2 id="h-registros">Registros</h2>
         <span class="hint" id="resumen"></span>
-        <button type="button" class="btn btn--sm" id="verificar-todas" hidden>Marcar todas como verificadas</button>
       </div>
       <div id="tarjetas" class="tarjetas"></div>
+      <div class="actions reg-sig" id="reg-sig" hidden>
+        <button type="button" class="btn btn--primary" id="ir-verificar">Siguiente → Verificar y enviar</button>
+      </div>
+    </section>
+
+    <!-- VERIFICAR Y ENVIAR: todas las imágenes/registros juntos -->
+    <section class="panel" id="verificacion" aria-labelledby="h-verificacion">
+      <div class="panel__head">
+        <h2 id="h-verificacion">Verificar y enviar</h2>
+        <span class="hint" id="vf-resumen"></span>
+      </div>
+      <div class="pr__tabla" id="vf-tabla" role="list"></div>
+      <p class="hint" id="vf-ayuda">Toca una fila para ver o corregir sus datos.</p>
+      <div id="vf-detalle" class="tarjetas"></div>
+      <label class="verificar vf-confirmo"><input type="checkbox" id="vf-confirmo"> Verifiqué la información de todos los registros</label>
+      <div class="actions">
+        <button type="button" class="btn" id="vf-volver">← Volver</button>
+        <button type="button" class="btn btn--primary" id="vf-enviar" disabled>Enviar registros</button>
+        <span id="vf-msg" class="hint" role="status"></span>
+      </div>
     </section>
 
     <!-- 4. PUNTOS GUARDADOS · ELIMINAR EN ARCGIS -->
@@ -284,14 +303,14 @@
 
   <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js" integrity="sha384-KRanV2NRwHPanp7iM6nlLQC5jPCTscSYMko30dLJHzNXJaUNtcucWv+SOi3jV3PE" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js" integrity="sha384-r1ru3tcf6FhnCFR4B7pIFG+BhFF9LlFtz/P1y4pblWn3AGs9y3lBx5SKLNf4+rED" crossorigin="anonymous"></script>
-  <script src="js/proteccion.js?v=8.24"></script>
-  <script src="js/app-instalable.js?v=8.24"></script>
-  <script src="js/config.js?v=8.24"></script>
-  <script src="js/municipios.js?v=8.24"></script>
-  <script src="js/ocr.js?v=8.24"></script>
-  <script src="js/lectorpdf.js?v=8.24"></script>
-  <script src="js/inicio.js?v=8.24"></script>
-  <script src="js/capas.js?v=8.24"></script>
-  <script src="js/app.js?v=8.24"></script>
+  <script src="js/proteccion.js?v=8.25"></script>
+  <script src="js/app-instalable.js?v=8.25"></script>
+  <script src="js/config.js?v=8.25"></script>
+  <script src="js/municipios.js?v=8.25"></script>
+  <script src="js/ocr.js?v=8.25"></script>
+  <script src="js/lectorpdf.js?v=8.25"></script>
+  <script src="js/inicio.js?v=8.25"></script>
+  <script src="js/capas.js?v=8.25"></script>
+  <script src="js/app.js?v=8.25"></script>
 </body>
 </html>
