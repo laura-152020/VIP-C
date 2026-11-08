@@ -115,7 +115,7 @@ La hoja `Registro_VIPC` se crea sola.
    | `SPREADSHEET_ID` | ID del Sheet |
    | `ADMIN_TOKEN` | una clave larga inventada: para anular registros y exportar a ArcGIS |
    | `APP_TOKEN` | opcional (el acceso ya lo controlan los usuarios) |
-   | `GEMINI_MODEL` | opcional; por defecto `gemini-3.8-flash` |
+   | `GEMINI_MODEL` | opcional; por defecto `gemini-3.5-flash-lite` (gratis: 500 por día y 10 por minuto; la app arranca máximo 9 por minuto) |
 
 4. Ejecuta `probarConfiguracion` y acepta los permisos. Esto crea las hojas `Registro_VIPC` y `Usuarios`.
 5. En la hoja `Usuarios`, da de alta al menos tu propio usuario (ver «Acceso con usuario y contraseña»).

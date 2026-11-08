@@ -6,7 +6,7 @@
  *
  * PROPIEDADES DEL SCRIPT (Configuración del proyecto → Propiedades del script):
  *   GEMINI_API_KEY   Clave de Google AI Studio (https://aistudio.google.com/apikey)
- *   GEMINI_MODEL     Opcional. Por defecto: gemini-3.8-flash
+ *   GEMINI_MODEL     Opcional. Por defecto: gemini-3.5-flash-lite
  *   GEMINI_MODEL_PRECISO Opcional. Modelo para la relectura precisa de un sello dudoso (por defecto, el mismo GEMINI_MODEL con razonamiento)
  *   ROOT_FOLDER_ID   ID de la carpeta raíz en Drive donde se guardan las fotos
  *   SPREADSHEET_ID   ID del Google Sheet que funciona como base de datos
@@ -85,7 +85,7 @@ const ANTIOQUIA = { latMin: 5.40, latMax: 8.90, lonMin: -77.15, lonMax: -73.85 }
 
 function doGet(e) {
   const p = (e && e.parameter) || {};
-  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.9.0", gemini: !!prop_("GEMINI_API_KEY", true) });
+  if (!p.accion) return json_({ status: "online", servicio: "VIP-C", version: "7.10.0", gemini: !!prop_("GEMINI_API_KEY", true) });
   if (p.accion === "decidir") return decidir_(p.t);
   try {
     // Exportación (ArcGIS): con la clave de administrador o con una sesión válida
@@ -816,7 +816,7 @@ function fetchGemini_(url, key, body) {
 }
 
 // Modelo que sí existe para esta clave: si el configurado no existe (404), prueba otros y recuerda el que funcione 6 horas.
-const MODELOS_RESPALDO = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
+const MODELOS_RESPALDO = ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"];
 function modeloQueFunciona_(key, fallido) {
   const cache = CacheService.getScriptCache();
   const guardado = cache.get("gemini_modelo_ok");
@@ -841,10 +841,17 @@ function modeloQueFunciona_(key, fallido) {
   return "";
 }
 
+// 429: ¿se acabó el cupo del DÍA (se reinicia a las 3:00 a.m. hora Colombia) o solo el del minuto?
+function limite429_(res) {
+  const t = String(res.getContentText() || "").slice(0, 2000);
+  if (/PerDay|per day/i.test(t)) return { status: "error", message: "Se acabó el cupo diario gratis de Gemini (429 cuota diaria). Se reinicia a las 3:00 a.m. (hora Colombia)." };
+  return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes por minuto (429). Se reintenta solo." };
+}
+
 function geminiRapido_(key, modelo, body, preciso) {
   if (preciso) modelo = prop_("GEMINI_MODEL_PRECISO", true) || modelo;
   const cacheado = CacheService.getScriptCache().get("gemini_modelo_ok");
-  if (cacheado && modelo === (prop_("GEMINI_MODEL", true) || "gemini-3.8-flash")) modelo = cacheado; // el configurado ya falló antes
+  if (cacheado && modelo === (prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite")) modelo = cacheado; // el configurado ya falló antes
   const llamar = function (m) {
     const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(m) + ":generateContent";
     const enviar = function (b) { return fetchGemini_(url, key, b); };
@@ -883,7 +890,7 @@ const REGLAS_SELLO =
 function leerSello_(payload) {
   if (!payload.base64) throw new Error("No llegó la imagen.");
   const key = prop_("GEMINI_API_KEY");
-  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
+  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite";
   const conRecorte = typeof payload.recorte === "string" && payload.recorte.length > 100;
 
   const prompt =
@@ -910,7 +917,7 @@ function leerSello_(payload) {
 
   const res = geminiRapido_(key, modelo, body, !!payload.preciso);
   const code = res.getResponseCode();
-  if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
+  if (code === 429) return limite429_(res);
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };
 
   const d = jsonGemini_(res);
@@ -985,7 +992,7 @@ function consultarCapa_(p) {
 function leerPdf_(payload) {
   if (!payload.base64) throw new Error("No llegó el PDF.");
   const key = prop_("GEMINI_API_KEY");
-  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
+  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite";
   const prompt =
     "El PDF es un acta de visita técnica o informe técnico de vías de la Gobernación de Antioquia (Colombia). " +
     "Extrae los datos EXACTAMENTE como aparecen. No inventes: si algo no aparece, devuelve \"\".\n" +
@@ -1016,7 +1023,7 @@ function leerPdf_(payload) {
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelo) + ":generateContent";
   const res = fetchGemini_(url, key, body);
   const code = res.getResponseCode();
-  if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes. Intenta de nuevo en un minuto." };
+  if (code === 429) return limite429_(res);
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };
   const r = JSON.parse(res.getContentText());
   const texto = r && r.candidates && r.candidates[0] && r.candidates[0].content &&
@@ -1054,7 +1061,7 @@ function leerFotos_(payload) {
   const imgs = (Array.isArray(payload.imagenes) ? payload.imagenes : []).slice(0, 16).filter(function (b) { return typeof b === "string" && b.length > 100; });
   if (!imgs.length) throw new Error("No llegaron fotos.");
   const key = prop_("GEMINI_API_KEY");
-  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
+  const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite";
   const prompt =
     "Te envío " + imgs.length + " imágenes en orden (0 a " + (imgs.length - 1) + "), sacadas de un acta de visita vial de Antioquia (Colombia). " +
     "Muchas son fotos con un sello de texto superpuesto (fecha, hora, coordenadas y lugar), por ejemplo «13/05/26, 8:40 a.m. N 6° 22' 10\" W 75° 42' 28\" Palmitas»; " +
@@ -1070,7 +1077,7 @@ function leerFotos_(payload) {
   imgs.forEach(function (b) { parts.push({ inline_data: { mime_type: "image/jpeg", data: b } }); });
   const res = geminiRapido_(key, modelo, { contents: [{ parts: parts }], generationConfig: { responseMimeType: "application/json", temperature: 0 } });
   const code = res.getResponseCode();
-  if (code === 429) return { status: "error", reintentar: true, message: "Gemini está limitando solicitudes (cuota). Intenta en un minuto." };
+  if (code === 429) return limite429_(res);
   if (code !== 200) return { status: "error", message: "Gemini respondió " + code + ": " + errorGemini_(res) };
   const r = JSON.parse(res.getContentText());
   const texto = r && r.candidates && r.candidates[0] && r.candidates[0].content && r.candidates[0].content.parts && r.candidates[0].content.parts[0] && r.candidates[0].content.parts[0].text;
@@ -1687,7 +1694,7 @@ function estadoIA_() {
   if (!key) r = { status: "success", ok: false, motivo: "falta la clave de Gemini (GEMINI_API_KEY)" };
   else {
     try {
-      const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.8-flash";
+      const modelo = prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite";
       const res = geminiRapido_(key, modelo, { contents: [{ parts: [{ text: "Responde solo: ok" }] }] });
       const code = res.getResponseCode();
       const detalle = code === 200 ? "" : " (" + String(errorGemini_(res)).slice(0, 160) + ")";
@@ -1702,7 +1709,7 @@ function estadoIA_() {
 function probarGemini() {
   const key = prop_("GEMINI_API_KEY", true);
   if (!key) { Logger.log("Falta la propiedad GEMINI_API_KEY (Configuración del proyecto → Propiedades del script)."); return; }
-  const modelos = [prop_("GEMINI_MODEL", true) || "gemini-3.8-flash"];
+  const modelos = [prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite"];
   if (prop_("GEMINI_MODEL_PRECISO", true)) modelos.push(prop_("GEMINI_MODEL_PRECISO", true));
   modelos.forEach(function (modelo) {
     const body = { contents: [{ parts: [{ text: "Responde solo este JSON: {\"ok\":true}" }] }], generationConfig: { responseMimeType: "application/json", temperature: 0 } };
@@ -1729,6 +1736,6 @@ function probarConfiguracion() {
   hojaUsuarios_();
   hojaEmpresas_();
   secreto_();
-  Logger.log("Configuración correcta. Modelo: " + (prop_("GEMINI_MODEL", true) || "gemini-3.8-flash") +
+  Logger.log("Configuración correcta. Modelo: " + (prop_("GEMINI_MODEL", true) || "gemini-3.5-flash-lite") +
     ". Ahora agrega usuarios en la hoja «Usuarios» del Sheet.");
 }

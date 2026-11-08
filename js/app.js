@@ -503,8 +503,18 @@
   /* Consultas a Gemini EN FILA (máx. 2 a la vez) y con reintento automático si Gemini limita solicitudes (429).
      Mandar muchas consultas juntas hace que Gemini las rechace y todo termina en el lector lento del navegador. */
   const ColaIA = (() => {
+    // Gemini gratis: 10 consultas por minuto. Se arrancan máximo 9 por minuto para no toparse con el límite.
+    const POR_MINUTO = 9; const inicios = [];
     let activos = 0; const espera = [];
-    const siguiente = () => { if (activos >= 2 || !espera.length) return; activos++; const t = espera.shift(); t().finally(() => { activos--; siguiente(); }); };
+    const cupoMinuto = () => { const t = Date.now(); while (inicios.length && t - inicios[0] > 60000) inicios.shift(); return inicios.length < POR_MINUTO ? 0 : 60000 - (t - inicios[0]) + 50; };
+    let reloj = null;
+    const siguiente = () => {
+      if (activos >= 2 || !espera.length || reloj) return;
+      const w = cupoMinuto();
+      if (w > 0) { reloj = setTimeout(() => { reloj = null; siguiente(); }, w); return; }
+      inicios.push(Date.now()); activos++;
+      const t = espera.shift(); t().finally(() => { activos--; siguiente(); }); siguiente();
+    };
     return (fn) => new Promise((ok) => { espera.push(() => Promise.resolve().then(fn).then(ok, () => ok(null))); siguiente(); });
   })();
   const pausa = (ms) => new Promise((ok) => setTimeout(ok, ms));
@@ -540,10 +550,10 @@
         .then((s) => {
           if (s.status === "success") return deIA(s);
           r.errorIA = s.message || "sin respuesta";
-          if (/429|cuota|quota|limitando/i.test(r.errorIA)) geminiCaidoHasta = Date.now() + 5 * 60000; // 5 minutos sin insistir
+          if (/429|cuota|quota|limitando/i.test(r.errorIA)) geminiCaidoHasta = Date.now() + (/diario/i.test(r.errorIA) ? 30 : 1.2) * 60000; // cupo del día: 30 min; del minuto: 70 s
           return preciso ? null : ocrGoogle(r);
         }).catch(() => null),
-      new Promise((ok) => setTimeout(() => ok(null), preciso ? 70000 : 45000)) // máximo 45 s (70 s en la lectura precisa), con reintentos
+      new Promise((ok) => setTimeout(() => ok(null), preciso ? 120000 : 100000)) // espera cola de 10/min + reintentos
     ]);
   }
   const editado = (r, k) => !!(r.editados && r.editados[k]);
